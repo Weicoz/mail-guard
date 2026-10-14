@@ -6,9 +6,8 @@
     <string>com.weicoz.mailguard</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/homebrew/bin/goimapnotify</string>
-        <string>-conf</string>
-        <string>/Users/weicoz/.config/goimapnotify/goimapnotify.yaml</string>
+        <string>/opt/homebrew/bin/python3</string>
+        <string>/Users/weicoz/File/git/mail-guard/scripts/run_daemon.py</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
