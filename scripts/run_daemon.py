@@ -69,19 +69,24 @@ onNewMail: "{HANDLE_MAIL_SCRIPT} {acc_name} '%[mailbox]' '%[uid]'"
         f.write(content)
     return conf_path
 
+import shutil
+
+GOIMAPNOTIFY_BIN = shutil.which("goimapnotify") or "/opt/homebrew/bin/goimapnotify"
+
 def start_account_worker(acc_name: str, cfg: dict):
     conf_path = generate_notify_config(acc_name, cfg)
     env = os.environ.copy()
+    env["PATH"] = f"/opt/homebrew/bin:/usr/local/bin:{env.get('PATH', '')}"
     proxy = cfg.get("proxy")
     if proxy:
         env["ALL_PROXY"] = f"socks5://{proxy}"
-        print(f"[mail-guard-daemon] 启动 [{acc_name}] 监听进程 (经 SOCKS5 代理: {proxy})...")
+        print(f"[mail-guard-daemon] 启动 [{acc_name}] 监听进程 (经 SOCKS5 代理: {proxy})...", flush=True)
     else:
         env.pop("ALL_PROXY", None)
-        print(f"[mail-guard-daemon] 启动 [{acc_name}] 监听进程 (直连)...")
+        print(f"[mail-guard-daemon] 启动 [{acc_name}] 监听进程 (直连)...", flush=True)
 
     proc = subprocess.Popen(
-        ["goimapnotify", "-conf", conf_path],
+        [GOIMAPNOTIFY_BIN, "-conf", conf_path],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE
@@ -100,7 +105,7 @@ def main():
         print("[mail-guard-daemon] accounts.json 中无有效账号", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[mail-guard-daemon] 守护进程启动，共加载 {len(accounts)} 个邮箱账号: {list(accounts.keys())}")
+    print(f"[mail-guard-daemon] 守护进程启动，共加载 {len(accounts)} 个邮箱账号: {list(accounts.keys())}", flush=True)
 
     for name, cfg in accounts.items():
         processes[name] = start_account_worker(name, cfg)
@@ -111,8 +116,8 @@ def main():
             poll = proc.poll()
             if poll is not None:
                 err = proc.stderr.read().decode("utf-8", errors="ignore")[-200:]
-                print(f"[mail-guard-daemon] 警告: 账号 [{name}] 监听进程意外退出 (代码 {poll}): {err.strip()}")
-                print(f"[mail-guard-daemon] 正在重新拉起账号 [{name}] 监听...")
+                print(f"[mail-guard-daemon] 警告: 账号 [{name}] 监听进程意外退出 (代码 {poll}): {err.strip()}", flush=True)
+                print(f"[mail-guard-daemon] 正在重新拉起账号 [{name}] 监听...", flush=True)
                 processes[name] = start_account_worker(name, accounts[name])
 
 if __name__ == "__main__":
