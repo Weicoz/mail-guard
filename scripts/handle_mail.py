@@ -12,6 +12,8 @@ import sys
 import os
 import re
 import json
+import socket
+import struct
 import subprocess
 import urllib.request
 import urllib.error
@@ -22,6 +24,7 @@ from email.header import decode_header
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_DIR = os.path.expanduser("~/.config/mail-guard")
+ACCOUNTS_CONFIG = os.path.join(CONFIG_DIR, "accounts.json")
 NOTIFY_CONFIG = os.path.expanduser("~/.config/goimapnotify/goimapnotify.yaml")
 
 def find_env_file():
@@ -144,23 +147,87 @@ def extract_plain_text_from_msg(msg):
         body = payload.decode(charset, errors='ignore') if payload else ""
     return body
 
-def read_mail_by_uid(folder: str, uid: str):
-    """通过本地 IMAP 仅抓取指定邮件的文本，无外链加载风险"""
-    # 从配置文件读取账号与密码
-    host, port, user, pwd = "imap.qq.com", 993, "", ""
+def get_account_config(account_name: str):
+    """根据账号名获取配置，优先读取 accounts.json，回退到 goimapnotify.yaml"""
+    if os.path.exists(ACCOUNTS_CONFIG):
+        try:
+            with open(ACCOUNTS_CONFIG, "r", encoding="utf-8") as f:
+                accounts = json.load(f)
+                if account_name and account_name in accounts:
+                    return accounts[account_name]
+                if not account_name and accounts:
+                    return next(iter(accounts.values()))
+                # 尝试通过 user 字段匹配
+                for cfg in accounts.values():
+                    if cfg.get("user") == account_name:
+                        return cfg
+        except Exception as e:
+            print(f"[mail-guard] 读取 accounts.json 失败: {e}", file=sys.stderr)
+
+    # 回退到 goimapnotify.yaml
+    cfg = {"host": "imap.qq.com", "port": 993, "user": "", "pass": "", "proxy": None}
     if os.path.exists(NOTIFY_CONFIG):
         with open(NOTIFY_CONFIG, "r", encoding="utf-8") as f:
             for line in f:
-                if line.startswith("host:"): host = line.split(":", 1)[1].strip().strip('"')
-                elif line.startswith("port:"): port = int(line.split(":", 1)[1].strip())
-                elif line.startswith("username:"): user = line.split(":", 1)[1].strip().strip('"')
-                elif line.startswith("password:"): pwd = line.split(":", 1)[1].strip().strip('"')
+                line_s = line.strip()
+                if line_s.startswith("host:"): cfg["host"] = line_s.split(":", 1)[1].strip().strip('"')
+                elif line_s.startswith("port:"): cfg["port"] = int(line_s.split(":", 1)[1].strip())
+                elif line_s.startswith("username:"): cfg["user"] = line_s.split(":", 1)[1].strip().strip('"')
+                elif line_s.startswith("password:"): cfg["pass"] = line_s.split(":", 1)[1].strip().strip('"')
+    return cfg
+
+def get_imap_connection(acc_cfg: dict):
+    """建立 IMAP 连接，原生支持 SOCKS5 代理分流与直连"""
+    host = acc_cfg.get("host", "imap.qq.com")
+    port = int(acc_cfg.get("port", 993))
+    user = acc_cfg.get("user", "")
+    pwd = acc_cfg.get("pass", "")
+    proxy = acc_cfg.get("proxy")
+
     if not user or not pwd:
-        return "", ""
-    try:
-        ctx = ssl.create_default_context()
+        raise ValueError("账号或密码为空")
+
+    ctx = ssl.create_default_context()
+
+    if proxy:
+        proxy_host, proxy_port = proxy.split(":")
+        proxy_port = int(proxy_port)
+        s = socket.create_connection((proxy_host, proxy_port), timeout=10)
+        s.sendall(b"\x05\x01\x00")
+        auth = s.recv(2)
+        if auth != b"\x05\x00":
+            raise RuntimeError(f"SOCKS5 代理认证失败: {auth}")
+
+        host_bytes = host.encode("utf-8")
+        req = b"\x05\x01\x00\x03" + bytes([len(host_bytes)]) + host_bytes + struct.pack(">H", port)
+        s.sendall(req)
+        resp = s.recv(10)
+        if len(resp) < 2 or resp[1] != 0:
+            err_code = resp[1] if len(resp) >= 2 else "未知"
+            raise RuntimeError(f"SOCKS5 代理连接目标失败，响应码: {err_code}")
+
+        sslsock = ctx.wrap_socket(s, server_hostname=host)
+
+        class ProxiedIMAP(imaplib.IMAP4_SSL):
+            def _create_socket(self, timeout):
+                return sslsock
+
+        mail = ProxiedIMAP(host, port, ssl_context=ctx)
+    else:
         mail = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
-        mail.login(user, pwd)
+
+    mail.login(user, pwd)
+    return mail
+
+def read_mail_by_uid(account: str, folder: str, uid: str):
+    """通过本地 IMAP 仅抓取指定邮件的纯文本，物理阻断远程追踪"""
+    acc_cfg = get_account_config(account)
+    if not acc_cfg or not acc_cfg.get("user"):
+        print(f"[mail-guard] 未找到账号 '{account}' 的配置", file=sys.stderr)
+        return "", ""
+
+    try:
+        mail = get_imap_connection(acc_cfg)
         mail.select(folder or "INBOX")
         res, msg_data = mail.uid('fetch', str(uid), '(RFC822)')
         mail.logout()
@@ -171,7 +238,7 @@ def read_mail_by_uid(folder: str, uid: str):
             body = extract_plain_text_from_msg(msg)
             return subject, body
     except Exception as e:
-        print(f"[mail-guard] IMAP 读取失败: {e}", file=sys.stderr)
+        print(f"[mail-guard] IMAP 读取失败 ({account}): {e}", file=sys.stderr)
     return "", ""
 
 def main():
@@ -184,7 +251,7 @@ def main():
         sys.exit(1)
 
     print(f"[mail-guard] 收到新邮件通知: 账号={account}, 文件夹={folder}, UID={uid}")
-    subject, body = read_mail_by_uid(folder, uid)
+    subject, body = read_mail_by_uid(account, folder, uid)
     if not subject and not body:
         print("[mail-guard] 获取邮件内容为空或失败，退出")
         sys.exit(0)
