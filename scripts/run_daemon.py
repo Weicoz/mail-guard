@@ -34,17 +34,43 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
+def probe_valid_mailboxes(acc_name: str, cfg: dict, candidate_boxes: list) -> list:
+    """连接 IMAP 获取服务端真实存在的邮箱目录，过滤掉不存在的目录以彻底避免 goimapnotify 死循环退出"""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import handle_mail
+        mail = handle_mail.get_imap_connection(cfg)
+        status, folder_list = mail.list()
+        mail.logout()
+        if status == 'OK' and folder_list:
+            server_folders = set()
+            for f in folder_list:
+                if isinstance(f, bytes):
+                    f = f.decode('utf-8', errors='ignore')
+                name = f.split('\" \"')[-1].strip('\"') if '\" \"' in f else f.split()[-1].strip('\"')
+                server_folders.add(name.lower())
+            
+            valid = [b for b in candidate_boxes if b.lower() in server_folders]
+            if valid:
+                print(f"[mail-guard-daemon] [{acc_name}] 动态探测可用目录: {valid}", flush=True)
+                return valid
+    except Exception as e:
+        print(f"[mail-guard-daemon] [{acc_name}] 目录动态探测跳过 ({e})，使用默认配置", flush=True)
+
+    return ["INBOX"]
+
 def generate_notify_config(acc_name: str, cfg: dict) -> str:
     os.makedirs(NOTIFY_DIR, exist_ok=True)
     conf_path = os.path.join(NOTIFY_DIR, f"{acc_name}.yaml")
     
-    # 针对不同服务商设置默认监视文件夹
-    boxes = ["INBOX"]
+    # 针对不同服务商设置候选监视文件夹
+    candidates = ["INBOX"]
     if "qq.com" in cfg.get("host", ""):
-        boxes = ["INBOX", "Junk"]
+        candidates = ["INBOX", "Junk"]
     elif "gmail.com" in cfg.get("host", ""):
-        boxes = ["INBOX"]
+        candidates = ["INBOX"]
 
+    boxes = probe_valid_mailboxes(acc_name, cfg, candidates)
     boxes_yaml = "\n".join([f'  - "{b}"' for b in boxes])
     
     if cfg.get("auth_type") == "xoauth2":
