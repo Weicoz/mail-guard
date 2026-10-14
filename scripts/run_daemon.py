@@ -41,7 +41,7 @@ def generate_notify_config(acc_name: str, cfg: dict) -> str:
     # 针对不同服务商设置默认监视文件夹
     boxes = ["INBOX"]
     if "qq.com" in cfg.get("host", ""):
-        boxes = ["INBOX", "Junk", "Spam"]
+        boxes = ["INBOX", "Junk"]
     elif "gmail.com" in cfg.get("host", ""):
         boxes = ["INBOX"]
 
