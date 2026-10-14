@@ -47,13 +47,20 @@ def generate_notify_config(acc_name: str, cfg: dict) -> str:
 
     boxes_yaml = "\n".join([f'  - "{b}"' for b in boxes])
     
+    if cfg.get("auth_type") == "xoauth2":
+        ms_oauth_script = os.path.join(os.path.dirname(__file__), "ms_oauth2.py")
+        auth_block = f"""passwordCmd: "/opt/homebrew/bin/python3 {ms_oauth_script} token"
+xOAuth2: true"""
+    else:
+        auth_block = f'password: "{cfg["pass"]}"'
+
     content = f"""host: "{cfg['host']}"
 port: {cfg.get('port', 993)}
 tls: true
 tlsOptions:
   rejectUnauthorized: true
 username: "{cfg['user']}"
-password: "{cfg['pass']}"
+{auth_block}
 boxes:
 {boxes_yaml}
 onNewMail: "{HANDLE_MAIL_SCRIPT} {acc_name} '%[mailbox]' '%[uid]'"

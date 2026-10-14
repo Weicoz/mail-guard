@@ -34,6 +34,8 @@ wheels/
 *.key
 *.pem
 *.secret
+*.json
+!*.json.example
 
 # 日志与系统临时文件
 *.log

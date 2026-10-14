@@ -184,7 +184,8 @@ def get_imap_connection(acc_cfg: dict):
     pwd = acc_cfg.get("pass", "")
     proxy = acc_cfg.get("proxy")
 
-    if not user or not pwd:
+    auth_type = acc_cfg.get("auth_type", "password")
+    if auth_type != "xoauth2" and (not user or not pwd):
         raise ValueError("账号或密码为空")
 
     ctx = ssl.create_default_context()
@@ -216,7 +217,15 @@ def get_imap_connection(acc_cfg: dict):
     else:
         mail = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
 
-    mail.login(user, pwd)
+    if auth_type == "xoauth2":
+        import ms_oauth2
+        token = ms_oauth2.get_valid_access_token()
+        if not token:
+            raise RuntimeError(f"获取 {user} 的 OAuth2 Access Token 失败")
+        auth_string = f"user={user}\x01auth=Bearer {token}\x01\x01".encode("utf-8")
+        mail.authenticate("XOAUTH2", lambda x: auth_string)
+    else:
+        mail.login(user, pwd)
     return mail
 
 def read_mail_by_uid(account: str, folder: str, uid: str):
