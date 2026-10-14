@@ -1,0 +1,23 @@
+# ==============================================================================
+# goimapnotify 邮件实时监听配置模板
+# 目标路径: ~/.config/goimapnotify/goimapnotify.yaml
+# ==============================================================================
+
+host: "imap.example.com"
+port: 993
+tls: true
+tlsOptions:
+  rejectUnauthorized: true
+username: "user@example.com"
+password: "YOUR_APP_PASSWORD"
+
+# 监听的目标文件夹 (收件箱 + 垃圾箱)
+boxes:
+  - "INBOX"
+  - "Junk"
+  - "Spam"
+
+# 收到新邮件时执行事件处理脚本 (自动传入账户名、邮箱目录、邮件UID)
+onNewMail: "/Users/weicoz/.config/mail-guard/handle_mail.py personal '%[mailbox]' '%[uid]'"
+onNewMailPost: ""
+wait: 1

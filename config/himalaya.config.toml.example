@@ -1,0 +1,31 @@
+# ==============================================================================
+# Himalaya CLI 多邮箱配置模板
+# 目标路径: ~/.config/himalaya/config.toml
+# ==============================================================================
+
+# 账号 1: 个人邮箱 (默认)
+[accounts.personal]
+default = true
+email = "user@example.com"
+display-name = "Personal Account"
+
+backend.type = "imap"
+backend.host = "imap.example.com"
+backend.port = 993
+backend.encryption = "tls"
+backend.login = "user@example.com"
+backend.auth.type = "password"
+backend.auth.raw = "YOUR_APP_PASSWORD"
+
+# 账号 2: 工作/备用邮箱
+[accounts.work]
+email = "work@company.com"
+display-name = "Work Account"
+
+backend.type = "imap"
+backend.host = "imap.company.com"
+backend.port = 993
+backend.encryption = "tls"
+backend.login = "work@company.com"
+backend.auth.type = "password"
+backend.auth.raw = "YOUR_WORK_PASSWORD"
