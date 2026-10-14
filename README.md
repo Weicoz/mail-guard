@@ -52,15 +52,18 @@ mail-guard/
 ├── install.sh                   # 一键安装与环境部署脚本
 ├── setup_account.py             # 交互式邮箱账户配置与连通性验证工具
 ├── scripts/
+│   ├── query_mail.py            # Agent 主动拉取 CLI：按账号/关键词/发件人即时查询邮件
 │   ├── handle_mail.py           # 核心流转：本地粗筛、LLM 结构化提取、调用后壳
 │   ├── post_shell.sh            # 用户后壳脚本：支持桌面通知、Bark、飞书、TG
+│   ├── ms_oauth2.py             # 微软 OAuth2 Device Code 授权与自动 Token 刷新
+│   ├── run_daemon.py            # 多账号 IMAP IDLE 后台长连接守护管理器
 │   └── test_pipeline.sh         # 端到端自测模拟流水线
 ├── config/
 │   ├── mail-guard.env.example   # 大模型 API 配置模板
-│   ├── himalaya.config.toml.example # Himalaya 多邮箱配置模板
-│   └── goimapnotify.yaml.example    # goimapnotify 监听配置模板
+│   ├── accounts.json.example    # 多邮箱账户配置模板 (QQ/Gmail/Outlook)
+│   └── goimapnotify.yaml.example # goimapnotify 监听配置模板
 └── launchd/
-    └── com.weicoz.mailguard.plist   # macOS 原生 launchd 开机守护配置模板
+    └── com.weicoz.mailguard.plist # macOS 原生 launchd 开机守护配置模板
 ```
 
 ---
@@ -107,6 +110,23 @@ goimapnotify -conf ~/.config/goimapnotify/goimapnotify.yaml
 ```bash
 brew services start goimapnotify
 ```
+
+### 6. Agent 主动拉取邮件 (query_mail.py)
+Agent 或命令行可随时主动查询最新邮件或结构化提炼验证码：
+```bash
+# 查询所有邮箱最新 1 封邮件
+python3 scripts/query_mail.py
+
+# 专供 Agent 解析的结构化 JSON 输出
+python3 scripts/query_mail.py --account all --limit 2 --json
+
+# 按关键词检索 (如寻找验证码、Proton 提醒)
+python3 scripts/query_mail.py --account outlook --keyword "Proton"
+
+# 按发件人检索并输出完整正文
+python3 scripts/query_mail.py --from "tencent.com" --full
+```
+> 💡 默认采用 `BODY.PEEK[]` 只读模式拉取，绝对不会将服务器上的未读邮件标记为已读。
 
 ---
 
