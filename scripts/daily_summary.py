@@ -490,7 +490,7 @@ def main():
     new_watermarks = dict(watermarks)
 
     for acc_name, acc_cfg in accounts.items():
-        last_uid = watermarks.get(acc_name)
+        last_uid = None if args.all_time else watermarks.get(acc_name)
         mails, max_uid = fetch_recent_emails(acc_name, acc_cfg, hours=args.hours, last_uid=last_uid)
         all_mails.extend(mails)
         if max_uid is not None:
