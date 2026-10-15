@@ -366,7 +366,55 @@ def send_notifications(analysis, report_file=None):
         except Exception as e:
             print(f"[daily-summary] Bark 推送失败: {e}", file=sys.stderr)
 
+    # 3. 发送飞书 CLI (lark-cli) 专门推送到本人
+    send_feishu_lark_notification(title, analysis)
+
     print(f"[daily-summary] 通知已发出: {title}")
+
+def send_feishu_lark_notification(title, analysis):
+    """通过本机 lark-cli 将富文本 Markdown 汇总推送到用户本人飞书"""
+    import shutil, subprocess
+    lark_bin = shutil.which("lark-cli") or "/Users/weicoz/.local/bin/lark-cli"
+    if not os.path.exists(lark_bin):
+        return
+
+    user_id = os.environ.get("FEISHU_USER_ID", "ou_0a34d2b3bd5c66b0c9861692769afb0f")
+    actions = analysis.get("action_items", [])
+    alerts = analysis.get("important_alerts", [])
+    summary_text = analysis.get("summary_text", "")
+
+    md_lines = [
+        f"**{title}**",
+        f"> {summary_text}",
+        ""
+    ]
+    if actions:
+        md_lines.append(f"**🚨 待处理事项 ({len(actions)})**")
+        for idx, a in enumerate(actions, 1):
+            md_lines.append(f"{idx}. **[{a['account'].upper()}]** {a['subject']}\n   • 行动建议: {a['action_summary']}")
+        md_lines.append("")
+
+    if alerts:
+        md_lines.append(f"**⚠️ 重要通知与安全提醒 ({len(alerts)})**")
+        for idx, al in enumerate(alerts, 1):
+            md_lines.append(f"{idx}. **[{al['account'].upper()}]** {al['subject']}\n   • 提醒要点: {al['alert_summary']}")
+
+    md_content = "\n".join(md_lines)
+
+    try:
+        proc = subprocess.run(
+            [lark_bin, "im", "+messages-send", "--user-id", user_id, "--markdown", md_content],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=10
+        )
+        if proc.returncode == 0:
+            print(f"[daily-summary] 飞书 CLI 消息已成功发送至用户本人 ({user_id})")
+        else:
+            err = proc.stderr.decode(errors="ignore").strip()
+            print(f"[daily-summary] 飞书 CLI 发送失败: {err}", file=sys.stderr)
+    except Exception as e:
+        print(f"[daily-summary] 飞书 CLI 调用异常: {e}", file=sys.stderr)
 
 def save_markdown_report(analysis, all_scanned_count):
     os.makedirs(SUMMARIES_DIR, exist_ok=True)

@@ -27,11 +27,16 @@ CONFIG_DIR="$HOME/.config/mail-guard"
 HIMALAYA_DIR="$HOME/.config/himalaya"
 NOTIFY_DIR="$HOME/.config/goimapnotify"
 
-mkdir -p "$CONFIG_DIR" "$HIMALAYA_DIR" "$NOTIFY_DIR"
+mkdir -p "$CONFIG_DIR" "$HIMALAYA_DIR" "$NOTIFY_DIR" "$HOME/.local/bin"
 
-# 3. 链接/复制脚本
+# 3. 链接/复制脚本与统一 CLI 入口
 cp "$DIR/scripts/handle_mail.py" "$CONFIG_DIR/handle_mail.py"
 chmod +x "$CONFIG_DIR/handle_mail.py"
+
+chmod +x "$DIR/scripts/cli.py"
+ln -sf "$DIR/scripts/cli.py" "$HOME/.local/bin/mail-guard"
+ln -sf "$DIR/scripts/cli.py" "$CONFIG_DIR/mail-guard"
+echo "✔ 统一命令行工具已安装至: $HOME/.local/bin/mail-guard"
 
 if [ ! -f "$CONFIG_DIR/post_shell.sh" ]; then
     cp "$DIR/scripts/post_shell.sh" "$CONFIG_DIR/post_shell.sh"
