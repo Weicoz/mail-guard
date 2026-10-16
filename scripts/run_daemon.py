@@ -75,11 +75,12 @@ def generate_notify_config(acc_name: str, cfg: dict) -> str:
     
     if cfg.get("auth_type") == "xoauth2":
         ms_oauth_script = os.path.join(os.path.dirname(__file__), "ms_oauth2.py")
-        auth_block = f"""passwordCmd: "/opt/homebrew/bin/python3 {ms_oauth_script} token"
+        auth_block = f"""passwordCmd: "{sys.executable} {ms_oauth_script} token"
 xOAuth2: true"""
     else:
         auth_block = f'password: "{cfg["pass"]}"'
 
+    on_new_mail_cmd = f"{sys.executable} {HANDLE_MAIL_SCRIPT} {acc_name} '%[mailbox]' '%[uid]'"
     content = f"""host: "{cfg['host']}"
 port: {cfg.get('port', 993)}
 tls: true
@@ -89,7 +90,7 @@ username: "{cfg['user']}"
 {auth_block}
 boxes:
 {boxes_yaml}
-onNewMail: "{HANDLE_MAIL_SCRIPT} {acc_name} '%[mailbox]' '%[uid]'"
+onNewMail: "{on_new_mail_cmd}"
 """
     with open(conf_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -97,12 +98,13 @@ onNewMail: "{HANDLE_MAIL_SCRIPT} {acc_name} '%[mailbox]' '%[uid]'"
 
 import shutil
 
-GOIMAPNOTIFY_BIN = shutil.which("goimapnotify") or "/opt/homebrew/bin/goimapnotify"
+GOIMAPNOTIFY_BIN = shutil.which("goimapnotify") or "goimapnotify"
 
 def start_account_worker(acc_name: str, cfg: dict):
     conf_path = generate_notify_config(acc_name, cfg)
     env = os.environ.copy()
-    env["PATH"] = f"/opt/homebrew/bin:/usr/local/bin:{env.get('PATH', '')}"
+    if sys.platform != "win32":
+        env["PATH"] = f"/opt/homebrew/bin:/usr/local/bin:{env.get('PATH', '')}"
     proxy = cfg.get("proxy")
     if proxy:
         env["ALL_PROXY"] = f"socks5://{proxy}"

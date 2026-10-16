@@ -1,0 +1,14 @@
+[Unit]
+Description=mail-guard multi-account IMAP IDLE daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=__PYTHON_BIN__ __PROJECT_DIR__/scripts/run_daemon.py
+Restart=always
+RestartSec=5
+StandardOutput=append:__HOME__/.config/mail-guard/mailguard.log
+StandardError=append:__HOME__/.config/mail-guard/mailguard.err
+
+[Install]
+WantedBy=default.target

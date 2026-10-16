@@ -1,0 +1,9 @@
+[Unit]
+Description=mail-guard daily email summary
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=__PYTHON_BIN__ __PROJECT_DIR__/scripts/daily_summary.py
+StandardOutput=append:__HOME__/.config/mail-guard/summary.log
+StandardError=append:__HOME__/.config/mail-guard/summary.err

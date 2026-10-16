@@ -17,8 +17,23 @@ EXPIRES="${3:-}"
 SUBJECT="${4:-验证码通知}"
 ACCOUNT="${5:-default}"
 
-# 1. 默认：macOS 桌面原生弹窗通知 (保证开箱即可感知)
-osascript -e "display notification \"${SERVICE} 验证码: ${CODE} ${EXPIRES}\" with title \"📧 收到新验证码 [${ACCOUNT}]\" sound name \"Glass\"" 2>/dev/null || true
+# 1. 默认：原生桌面弹窗通知 (自适应 macOS / Linux / Windows)
+if command -v osascript >/dev/null 2>&1; then
+    # macOS
+    osascript -e "display notification \"${SERVICE} 验证码: ${CODE} ${EXPIRES}\" with title \"📧 收到新验证码 [${ACCOUNT}]\" sound name \"Glass\"" 2>/dev/null || true
+elif command -v notify-send >/dev/null 2>&1; then
+    # Linux (libnotify)
+    notify-send -a "mail-guard" "📧 收到新验证码 [${ACCOUNT}]" "${SERVICE} 验证码: ${CODE} ${EXPIRES}" 2>/dev/null || true
+elif command -v powershell.exe >/dev/null 2>&1; then
+    # Windows (WSL/Git Bash)
+    powershell.exe -NoProfile -Command "
+        [reflection.assembly]::loadwithpartialname('System.Windows.Forms') | Out-Null;
+        \$notify = New-Object System.Windows.Forms.NotifyIcon;
+        \$notify.Icon = [System.Drawing.SystemIcons]::Information;
+        \$notify.Visible = \$true;
+        \$notify.ShowBalloonTip(5000, '📧 收到新验证码 [${ACCOUNT}]', '${SERVICE} 验证码: ${CODE} ${EXPIRES}', [System.Windows.Forms.ToolTipIcon]::Info);
+    " 2>/dev/null || true
+fi
 
 # 2. 飞书 CLI (lark-cli) 推送配置（支持从环境变量或 mail-guard.env 读取）
 CONFIG_ENV="${HOME}/.config/mail-guard/mail-guard.env"

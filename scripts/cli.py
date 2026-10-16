@@ -40,54 +40,114 @@ def run_script(script_name, extra_args):
     except KeyboardInterrupt:
         sys.exit(130)
 
+def send_desktop_notification(title: str, message: str):
+    """跨平台桌面原生弹窗 (自适应 macOS / Linux / Windows)"""
+    import platform
+    plat = platform.system().lower()
+    try:
+        clean_msg = message.replace("\n", " | ").replace('"', '\\"')
+        clean_title = title.replace('"', '\\"')
+        if plat == "darwin":
+            subprocess.run(
+                ["osascript", "-e", f'display notification "{clean_msg}" with title "{clean_title}" sound name "Glass"'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+        elif plat == "linux":
+            if shutil.which("notify-send"):
+                subprocess.run(
+                    ["notify-send", "-a", "mail-guard", clean_title, clean_msg],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+        elif plat == "windows":
+            ps_cmd = (
+                f"[reflection.assembly]::loadwithpartialname('System.Windows.Forms') | Out-Null; "
+                f"$notify = New-Object System.Windows.Forms.NotifyIcon; "
+                f"$notify.Icon = [System.Drawing.SystemIcons]::Information; "
+                f"$notify.Visible = $true; "
+                f"$notify.ShowBalloonTip(5000, '{clean_title}', '{clean_msg}', [System.Windows.Forms.ToolTipIcon]::Info)"
+            )
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
 def handle_daemon(args):
     action = args.action
-    uid = os.getuid()
+    import platform
+    plat = platform.system().lower()
 
     if action == "status":
-        print("=== 🛡️ mail-guard 后台服务状态 ===")
-        # launchd 状态
-        print("\n[LaunchAgents 状态]")
-        subprocess.run(["launchctl", "list"], stdout=subprocess.PIPE, text=True)
-        res = subprocess.run(["launchctl", "list"], stdout=subprocess.PIPE, text=True)
-        for line in res.stdout.splitlines():
-            if "com.weicoz.mailguard" in line:
-                print(" ", line)
+        print(f"=== 🛡️ mail-guard 后台服务状态 [{plat.upper()}] ===")
+        if plat == "darwin":
+            print("\n[LaunchAgents 状态]")
+            res = subprocess.run(["launchctl", "list"], stdout=subprocess.PIPE, text=True)
+            for line in res.stdout.splitlines():
+                if "com.weicoz.mailguard" in line:
+                    print(" ", line)
+        elif plat == "linux":
+            print("\n[systemd 用户服务状态]")
+            subprocess.run(["systemctl", "--user", "status", "mailguard.service", "--no-pager"])
+            subprocess.run(["systemctl", "--user", "status", "mailguard-summary.timer", "--no-pager"])
+        elif plat == "windows":
+            print("\n[Windows 任务进程]")
+            subprocess.run(["tasklist", "/FI", "IMAGENAME eq python.exe"])
 
         # 实际进程状态
         print("\n[运行中进程]")
-        res_ps = subprocess.run(["ps", "aux"], stdout=subprocess.PIPE, text=True)
-        running = []
-        for line in res_ps.stdout.splitlines():
-            if any(k in line for k in ["goimapnotify", "run_daemon.py", "daily_summary.py"]) and "grep" not in line and "cli.py" not in line:
-                running.append(line)
-        if running:
-            for r in running:
-                cols = r.split(None, 10)
-                pid = cols[1]
-                cmd = cols[10] if len(cols) > 10 else ""
-                print(f"  • PID {pid}: {cmd}")
+        if plat == "windows":
+            subprocess.run(["powershell", "-NoProfile", "-Command", "Get-Process python -ErrorAction SilentlyContinue | Select-Object Id, ProcessName, Path"])
         else:
-            print("  (当前无常驻 worker 进程)")
+            res_ps = subprocess.run(["ps", "aux"], stdout=subprocess.PIPE, text=True)
+            running = []
+            for line in res_ps.stdout.splitlines():
+                if any(k in line for k in ["goimapnotify", "run_daemon.py", "daily_summary.py"]) and "grep" not in line and "cli.py" not in line:
+                    running.append(line)
+            if running:
+                for r in running:
+                    cols = r.split(None, 10)
+                    pid = cols[1]
+                    cmd = cols[10] if len(cols) > 10 else ""
+                    print(f"  • PID {pid}: {cmd}")
+            else:
+                print("  (当前无常驻 worker 进程)")
 
     elif action == "restart":
         print("正在重启 mail-guard 所有后台守护进程...")
-        subprocess.run(["launchctl", "unload", IDLE_PLIST], stderr=subprocess.DEVNULL)
-        subprocess.run(["launchctl", "load", "-w", IDLE_PLIST])
-        subprocess.run(["launchctl", "unload", SUMMARY_PLIST], stderr=subprocess.DEVNULL)
-        subprocess.run(["launchctl", "load", "-w", SUMMARY_PLIST])
+        if plat == "darwin":
+            subprocess.run(["launchctl", "unload", IDLE_PLIST], stderr=subprocess.DEVNULL)
+            subprocess.run(["launchctl", "load", "-w", IDLE_PLIST])
+            subprocess.run(["launchctl", "unload", SUMMARY_PLIST], stderr=subprocess.DEVNULL)
+            subprocess.run(["launchctl", "load", "-w", SUMMARY_PLIST])
+        elif plat == "linux":
+            subprocess.run(["systemctl", "--user", "restart", "mailguard.service"])
+            subprocess.run(["systemctl", "--user", "restart", "mailguard-summary.timer"])
+        elif plat == "windows":
+            script_path = os.path.join(SCRIPTS_DIR, "run_daemon.py")
+            subprocess.Popen([sys.executable, script_path], creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
         print("✅ 后台服务已成功重启并重载配置。")
 
     elif action == "start":
         print("正在加载并启动后台守护进程...")
-        subprocess.run(["launchctl", "load", "-w", IDLE_PLIST])
-        subprocess.run(["launchctl", "load", "-w", SUMMARY_PLIST])
+        if plat == "darwin":
+            subprocess.run(["launchctl", "load", "-w", IDLE_PLIST])
+            subprocess.run(["launchctl", "load", "-w", SUMMARY_PLIST])
+        elif plat == "linux":
+            subprocess.run(["systemctl", "--user", "start", "mailguard.service"])
+            subprocess.run(["systemctl", "--user", "start", "mailguard-summary.timer"])
+        elif plat == "windows":
+            script_path = os.path.join(SCRIPTS_DIR, "run_daemon.py")
+            subprocess.Popen([sys.executable, script_path], creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
         print("✅ 服务已启动。")
 
     elif action == "stop":
         print("正在停止后台守护进程...")
-        subprocess.run(["launchctl", "unload", IDLE_PLIST])
-        subprocess.run(["launchctl", "unload", SUMMARY_PLIST])
+        if plat == "darwin":
+            subprocess.run(["launchctl", "unload", IDLE_PLIST])
+            subprocess.run(["launchctl", "unload", SUMMARY_PLIST])
+        elif plat == "linux":
+            subprocess.run(["systemctl", "--user", "stop", "mailguard.service"])
+            subprocess.run(["systemctl", "--user", "stop", "mailguard-summary.timer"])
+        elif plat == "windows":
+            print("Windows 环境请在任务管理器中终止 python 守护进程。")
         print("🛑 服务已停止。")
 
     elif action == "logs":
@@ -97,7 +157,10 @@ def handle_daemon(args):
             return
         print(f"=== 显示日志 ({log_path})，按 Ctrl+C 退出 ===")
         try:
-            subprocess.run(["tail", "-n", "30", "-f", log_path])
+            if plat == "windows":
+                subprocess.run(["powershell", "-NoProfile", "-Command", f"Get-Content '{log_path}' -Tail 30 -Wait"])
+            else:
+                subprocess.run(["tail", "-n", "30", "-f", log_path])
         except KeyboardInterrupt:
             pass
 
@@ -153,14 +216,14 @@ def load_env():
     return env
 
 def handle_notify(args):
-    print("正在测试全通道消息推送 (飞书 CLI / Bark / macOS 桌面弹窗)...")
+    print("正在测试全通道消息推送 (飞书 CLI / Bark / 原生桌面弹窗)...")
     env = load_env()
     user_id = env.get("FEISHU_USER") or os.environ.get("FEISHU_USER_ID", "")
     lark_bin = shutil.which("lark-cli") or os.path.expanduser("~/.local/bin/lark-cli")
 
-    # 1. macOS 桌面弹窗
-    os.system('osascript -e \'display notification "这是一条来自 mail-guard CLI 的通道自检测试通知" with title "📧 mail-guard 通道测试" sound name "Glass"\' 2>/dev/null || true')
-    print("  • [macOS 桌面] 弹窗已触发")
+    # 1. 桌面原生弹窗 (自适应 macOS / Linux / Windows)
+    send_desktop_notification("📧 mail-guard 通道测试", "这是一条来自 mail-guard CLI 的跨平台通道自检测试通知")
+    print("  • [原生桌面] 弹窗已触发")
 
     # 2. Bark 手机推送
     bark_key = env.get("BARK_KEY") or os.environ.get("BARK_KEY", "")

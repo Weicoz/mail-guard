@@ -352,9 +352,8 @@ def send_notifications(analysis, report_file=None):
             lines.append(f"• [提醒] {al['subject'][:22]}")
         body = "\n".join(lines)
 
-    # 1. 发送 macOS 桌面原生弹窗通知
-    osa_cmd = f'display notification "{body.replace(chr(10), " | ")}" with title "{title}" sound name "Glass"'
-    os.system(f"osascript -e '{osa_cmd}' 2>/dev/null || true")
+    # 1. 发送原生桌面弹窗通知 (自适应 macOS / Linux / Windows)
+    send_desktop_notification(title, body)
 
     # 2. 发送 Bark 手机通知
     if BARK_KEY:
@@ -371,6 +370,36 @@ def send_notifications(analysis, report_file=None):
     send_feishu_lark_notification(title, analysis)
 
     print(f"[daily-summary] 通知已发出: {title}")
+
+def send_desktop_notification(title: str, message: str):
+    """跨平台桌面原生弹窗 (自适应 macOS / Linux / Windows)"""
+    import platform, subprocess, shutil
+    plat = platform.system().lower()
+    try:
+        clean_msg = message.replace("\n", " | ").replace('"', '\\"')
+        clean_title = title.replace('"', '\\"')
+        if plat == "darwin":
+            subprocess.run(
+                ["osascript", "-e", f'display notification "{clean_msg}" with title "{clean_title}" sound name "Glass"'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+        elif plat == "linux":
+            if shutil.which("notify-send"):
+                subprocess.run(
+                    ["notify-send", "-a", "mail-guard", clean_title, clean_msg],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+        elif plat == "windows":
+            ps_cmd = (
+                f"[reflection.assembly]::loadwithpartialname('System.Windows.Forms') | Out-Null; "
+                f"$notify = New-Object System.Windows.Forms.NotifyIcon; "
+                f"$notify.Icon = [System.Drawing.SystemIcons]::Information; "
+                f"$notify.Visible = $true; "
+                f"$notify.ShowBalloonTip(5000, '{clean_title}', '{clean_msg}', [System.Windows.Forms.ToolTipIcon]::Info)"
+            )
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 def send_feishu_lark_notification(title, analysis):
     """通过本机 lark-cli 将富文本 Markdown 汇总推送到用户本人飞书"""
