@@ -6,8 +6,8 @@
     <string>com.weicoz.mailguard.summary</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/homebrew/bin/python3</string>
-        <string>/Users/weicoz/File/git/mail-guard/scripts/daily_summary.py</string>
+        <string>__PYTHON_BIN__</string>
+        <string>__PROJECT_DIR__/scripts/daily_summary.py</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -42,8 +42,8 @@
         </dict>
     </array>
     <key>StandardOutPath</key>
-    <string>/Users/weicoz/.config/mail-guard/summary.log</string>
+    <string>__HOME__/.config/mail-guard/summary.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/weicoz/.config/mail-guard/summary.err</string>
+    <string>__HOME__/.config/mail-guard/summary.err</string>
 </dict>
 </plist>

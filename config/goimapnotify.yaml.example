@@ -18,6 +18,6 @@ boxes:
   - "Spam"
 
 # 收到新邮件时执行事件处理脚本 (自动传入账户名、邮箱目录、邮件UID)
-onNewMail: "/Users/weicoz/.config/mail-guard/handle_mail.py personal '%[mailbox]' '%[uid]'"
+onNewMail: "$HOME/.config/mail-guard/handle_mail.py personal '%[mailbox]' '%[uid]'"
 onNewMailPost: ""
 wait: 1

@@ -40,10 +40,6 @@ try:
 except ImportError:
     ms_oauth2 = None
 
-# Bark 设备配置 (优先读取 harness-notify 配置或环境变量)
-BARK_KEY = "Mw3PxWMQotWSuxW7humoqD"
-BARK_SERVER = "https://api.day.app"
-
 def load_env():
     env = {}
     if os.path.exists(ENV_FILE):
@@ -56,6 +52,11 @@ def load_env():
     return env
 
 ENV = load_env()
+# Bark 设备配置 (优先从 mail-guard.env 或环境变量读取)
+BARK_KEY = ENV.get("BARK_KEY") or os.environ.get("BARK_KEY", "")
+BARK_SERVER = ENV.get("BARK_SERVER", os.environ.get("BARK_SERVER", "https://api.day.app"))
+FEISHU_USER = ENV.get("FEISHU_USER") or os.environ.get("FEISHU_USER", "")
+
 # 优先从 mail-guard.env 读取 LLM 配置，回退到环境变量
 LLM_API_KEY = ENV.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("LLM_API_KEY", "")
 LLM_BASE_URL = ENV.get("LLM_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
@@ -374,11 +375,13 @@ def send_notifications(analysis, report_file=None):
 def send_feishu_lark_notification(title, analysis):
     """通过本机 lark-cli 将富文本 Markdown 汇总推送到用户本人飞书"""
     import shutil, subprocess
-    lark_bin = shutil.which("lark-cli") or "/Users/weicoz/.local/bin/lark-cli"
+    lark_bin = shutil.which("lark-cli") or os.path.expanduser("~/.local/bin/lark-cli")
     if not os.path.exists(lark_bin):
         return
 
-    user_id = os.environ.get("FEISHU_USER_ID", "ou_0a34d2b3bd5c66b0c9861692769afb0f")
+    user_id = FEISHU_USER or os.environ.get("FEISHU_USER_ID", "")
+    if not user_id:
+        return
     actions = analysis.get("action_items", [])
     alerts = analysis.get("important_alerts", [])
     summary_text = analysis.get("summary_text", "")

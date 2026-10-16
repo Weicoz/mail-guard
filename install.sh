@@ -57,7 +57,27 @@ fi
 
 echo "✔ 脚本与配置文件部署完成: $CONFIG_DIR"
 
-# 4. 运行端到端自测
+# 4. 部署 LaunchAgents 守护配置 (仅 macOS)
+LAUNCH_DIR="$HOME/Library/LaunchAgents"
+if [ -d "$LAUNCH_DIR" ]; then
+    echo ">> 正在配置开机自启 LaunchAgents..."
+    PYTHON_BIN="$(which python3 || echo "/usr/bin/python3")"
+    if [ -f "$DIR/launchd/com.weicoz.mailguard.plist.example" ]; then
+        sed -e "s|__PROJECT_DIR__|$DIR|g" \
+            -e "s|__HOME__|$HOME|g" \
+            -e "s|__PYTHON_BIN__|$PYTHON_BIN|g" \
+            "$DIR/launchd/com.weicoz.mailguard.plist.example" > "$LAUNCH_DIR/com.weicoz.mailguard.plist"
+    fi
+    if [ -f "$DIR/launchd/com.weicoz.mailguard.summary.plist.example" ]; then
+        sed -e "s|__PROJECT_DIR__|$DIR|g" \
+            -e "s|__HOME__|$HOME|g" \
+            -e "s|__PYTHON_BIN__|$PYTHON_BIN|g" \
+            "$DIR/launchd/com.weicoz.mailguard.summary.plist.example" > "$LAUNCH_DIR/com.weicoz.mailguard.summary.plist"
+    fi
+    echo "✔ LaunchAgents 守护配置已生成至: $LAUNCH_DIR"
+fi
+
+# 5. 运行端到端自测
 echo ">> 正在执行端到端自测..."
 "$DIR/scripts/test_pipeline.sh"
 

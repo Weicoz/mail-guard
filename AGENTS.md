@@ -10,7 +10,7 @@
 - **系统自启守护 (launchd)**：`~/Library/LaunchAgents/com.weicoz.mailguard.plist`
   - 刷新重启服务必须使用：`launchctl kickstart -k gui/$(id -u)/com.weicoz.mailguard`
 - **本地代理**：海外邮箱 (Gmail, Outlook) 强制走 `127.0.0.1:7897` (SOCKS5)。
-- **Thunderbird 活跃配置**：`~/Library/Thunderbird/Profiles/y9hv5cav.default-release/`
+- **Thunderbird 活跃配置**：`~/Library/Thunderbird/Profiles/<profile-id>.default-release/`
   - 安全配置源为 `user.js`；修改首选项必须同步重置 `session.json` 并清理 `startupCache`。
 
 ## Agent 常用执行命令

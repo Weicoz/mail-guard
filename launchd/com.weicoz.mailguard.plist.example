@@ -6,16 +6,16 @@
     <string>com.weicoz.mailguard</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/homebrew/bin/python3</string>
-        <string>/Users/weicoz/File/git/mail-guard/scripts/run_daemon.py</string>
+        <string>__PYTHON_BIN__</string>
+        <string>__PROJECT_DIR__/scripts/run_daemon.py</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/Users/weicoz/.config/mail-guard/mailguard.log</string>
+    <string>__HOME__/.config/mail-guard/mailguard.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/weicoz/.config/mail-guard/mailguard.err</string>
+    <string>__HOME__/.config/mail-guard/mailguard.err</string>
 </dict>
 </plist>

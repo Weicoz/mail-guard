@@ -139,28 +139,48 @@ def handle_account(args):
         ms_script = os.path.join(SCRIPTS_DIR, "ms_oauth2.py")
         subprocess.run([sys.executable, ms_script, "login"])
 
+ENV_FILE = os.path.join(CONFIG_DIR, "mail-guard.env")
+
+def load_env():
+    env = {}
+    if os.path.exists(ENV_FILE):
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line_s = line.strip()
+                if line_s and not line_s.startswith("#") and "=" in line_s:
+                    k, v = line_s.split("=", 1)
+                    env[k.strip()] = v.strip().strip('"').strip("'")
+    return env
+
 def handle_notify(args):
     print("正在测试全通道消息推送 (飞书 CLI / Bark / macOS 桌面弹窗)...")
-    user_id = os.environ.get("FEISHU_USER_ID", "ou_0a34d2b3bd5c66b0c9861692769afb0f")
-    lark_bin = shutil.which("lark-cli") or "/Users/weicoz/.local/bin/lark-cli"
+    env = load_env()
+    user_id = env.get("FEISHU_USER") or os.environ.get("FEISHU_USER_ID", "")
+    lark_bin = shutil.which("lark-cli") or os.path.expanduser("~/.local/bin/lark-cli")
 
     # 1. macOS 桌面弹窗
     os.system('osascript -e \'display notification "这是一条来自 mail-guard CLI 的通道自检测试通知" with title "📧 mail-guard 通道测试" sound name "Glass"\' 2>/dev/null || true')
     print("  • [macOS 桌面] 弹窗已触发")
 
     # 2. Bark 手机推送
-    try:
-        import urllib.request, urllib.parse
-        bark_key = "Mw3PxWMQotWSuxW7humoqD"
-        msg_enc = urllib.parse.quote("测试消息已收到")
-        bark_url = f"https://api.day.app/{bark_key}/mail-guard/{msg_enc}?group=mail-guard"
-        urllib.request.urlopen(bark_url, timeout=5)
-        print("  • [Bark 手机] 推送请求已发出")
-    except Exception as e:
-        print(f"  • [Bark 手机] 失败: {e}")
+    bark_key = env.get("BARK_KEY") or os.environ.get("BARK_KEY", "")
+    if bark_key:
+        try:
+            import urllib.request, urllib.parse
+            msg_enc = urllib.parse.quote("测试消息已收到")
+            bark_server = env.get("BARK_SERVER", "https://api.day.app").rstrip("/")
+            bark_url = f"{bark_server}/{bark_key}/mail-guard/{msg_enc}?group=mail-guard"
+            urllib.request.urlopen(bark_url, timeout=5)
+            print("  • [Bark 手机] 推送请求已发出")
+        except Exception as e:
+            print(f"  • [Bark 手机] 失败: {e}")
+    else:
+        print("  • [Bark 手机] 未配置 BARK_KEY，跳过")
 
     # 3. 飞书 CLI
-    if os.path.exists(lark_bin):
+    if not user_id:
+        print("  • [飞书 CLI] 未在 mail-guard.env 配置 FEISHU_USER，跳过")
+    elif os.path.exists(lark_bin):
         try:
             res = subprocess.run(
                 [lark_bin, "im", "+messages-send", "--user-id", user_id, "--text", "【mail-guard CLI】消息通道测试：飞书专门推送至本人正常运作。"],
@@ -170,7 +190,7 @@ def handle_notify(args):
                 timeout=10
             )
             if res.returncode == 0:
-                print(f"  • [飞书 CLI] 消息已专门发送至本人 ({user_id})")
+                print(f"  • [飞书 CLI] 消息已专门发送至用户 ({user_id})")
             else:
                 print(f"  • [飞书 CLI] 发送失败: {res.stderr.strip()}")
         except Exception as e:

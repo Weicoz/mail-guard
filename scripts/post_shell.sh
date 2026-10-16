@@ -20,10 +20,14 @@ ACCOUNT="${5:-default}"
 # 1. 默认：macOS 桌面原生弹窗通知 (保证开箱即可感知)
 osascript -e "display notification \"${SERVICE} 验证码: ${CODE} ${EXPIRES}\" with title \"📧 收到新验证码 [${ACCOUNT}]\" sound name \"Glass\"" 2>/dev/null || true
 
-# 2. 飞书 CLI (lark-cli) 直接推送到用户本人
-LARK_BIN="/Users/weicoz/.local/bin/lark-cli"
-FEISHU_USER="ou_0a34d2b3bd5c66b0c9861692769afb0f"
-if [ -x "$LARK_BIN" ]; then
+# 2. 飞书 CLI (lark-cli) 推送配置（支持从环境变量或 mail-guard.env 读取）
+CONFIG_ENV="${HOME}/.config/mail-guard/mail-guard.env"
+if [ -z "${FEISHU_USER:-}" ] && [ -f "$CONFIG_ENV" ]; then
+    FEISHU_USER="$(grep -E '^\s*FEISHU_USER\s*=' "$CONFIG_ENV" | cut -d'=' -f2- | tr -d '"'\'' ' || true)"
+fi
+
+LARK_BIN="$(command -v lark-cli 2>/dev/null || echo "${HOME}/.local/bin/lark-cli")"
+if [ -n "${FEISHU_USER:-}" ] && [ -x "$LARK_BIN" ]; then
     "$LARK_BIN" im +messages-send --user-id "$FEISHU_USER" --text "📧 【${SERVICE}】收到验证码：${CODE}
 说明：${EXPIRES}
 来源：${ACCOUNT} - ${SUBJECT}" >/dev/null 2>&1 || true
