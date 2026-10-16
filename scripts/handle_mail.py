@@ -69,8 +69,12 @@ KEYWORDS = [
     "验证码", "校验码", "动态码", "安全码", "授权码", "确认码",
     "verification code", "verify code", "security code", "auth code",
     "one-time password", "otp", "passcode", "reset password", "重置密码",
-    "两步验证", "2fa", "two-factor"
+    "两步验证", "2fa", "two-factor",
+    "confirm your email", "verify your email", "activate your account",
+    "email confirmation", "确认你的邮箱", "激活账号"
 ]
+
+LINK_REGEX = re.compile(r'(https?://[^\s<>"\'\)]+/(?:email_confirmation|confirm|verify|activate|auth)[^\s<>"\'\)]*)', re.IGNORECASE)
 
 def pre_filter(subject: str, body: str) -> bool:
     content = f"{subject}\n{body}".lower()
@@ -81,7 +85,16 @@ def regex_extract(subject: str, body: str):
     code_match = re.search(r'(?:验证码|动态码|code|Code|OTP|passcode)[^\d\w]{0,10}([0-9a-zA-Z]{4,8})\b', text)
     if not code_match:
         code_match = re.search(r'\b([0-9]{4,6})\b', text)
-    code = code_match.group(1) if code_match else "未识别"
+    
+    link_match = LINK_REGEX.search(text)
+    link = link_match.group(1) if link_match else None
+
+    if code_match:
+        code = code_match.group(1)
+    elif link:
+        code = f"链接确认: {link}"
+    else:
+        code = "未识别"
     
     exp_match = re.search(r'([0-9一二两三四五六七八九十]+(?:分钟|小时|秒|min|minute|hour)内?(?:有效)?)', text)
     expires = exp_match.group(1) if exp_match else "尽快使用"
@@ -92,7 +105,7 @@ def regex_extract(subject: str, body: str):
     else:
         service = subject.split()[0] if subject else "未知服务"
         
-    return {"code": code, "service": service, "expires_in": expires}
+    return {"code": code, "service": service, "expires_in": expires, "link": link}
 
 def llm_extract(subject: str, body: str):
     if not LLM_API_KEY:

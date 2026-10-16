@@ -29,9 +29,9 @@ NOTIFY_DIR="$HOME/.config/goimapnotify"
 
 mkdir -p "$CONFIG_DIR" "$HIMALAYA_DIR" "$NOTIFY_DIR" "$HOME/.local/bin"
 
-# 3. 链接/复制脚本与统一 CLI 入口
-cp "$DIR/scripts/handle_mail.py" "$CONFIG_DIR/handle_mail.py"
-chmod +x "$CONFIG_DIR/handle_mail.py"
+# 3. 链接脚本与统一 CLI 入口
+ln -sf "$DIR/scripts/handle_mail.py" "$CONFIG_DIR/handle_mail.py"
+chmod +x "$DIR/scripts/handle_mail.py"
 
 chmod +x "$DIR/scripts/cli.py"
 ln -sf "$DIR/scripts/cli.py" "$HOME/.local/bin/mail-guard"

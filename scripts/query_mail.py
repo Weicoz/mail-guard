@@ -21,7 +21,9 @@ import imaplib
 import ssl
 import email
 from email.header import decode_header
+from email.utils import parsedate_to_datetime
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_DIR = os.path.expanduser("~/.config/mail-guard")
@@ -39,6 +41,7 @@ CODE_REGEX = re.compile(r'(?:验证码|动态码|code|Code|OTP|passcode)[^\d\w]{
 FALLBACK_CODE_REGEX = re.compile(r'\b([0-9]{4,6})\b')
 EXPIRES_REGEX = re.compile(r'([0-9一二两三四五六七八九十]+(?:分钟|小时|秒|min|minute|hour)内?(?:有效)?)')
 SERVICE_REGEX = re.compile(r'【([^】]+)】|\[([^\]]+)\]')
+LINK_REGEX = re.compile(r'(https?://[^\s<>"\'\)]+/(?:email_confirmation|confirm|verify|activate|auth)[^\s<>"\'\)]*)', re.IGNORECASE)
 
 def decode_mime_header(val):
     if not val:
@@ -89,7 +92,10 @@ def extract_code_info(subject, body):
     else:
         service = subject.split()[0] if subject else "未知平台"
 
-    return {"code": code, "service": service, "expires_in": expires}
+    link_match = LINK_REGEX.search(text)
+    link = link_match.group(1) if link_match else None
+
+    return {"code": code, "service": service, "expires_in": expires, "link": link}
 
 def load_accounts():
     if not os.path.exists(ACCOUNTS_CONFIG):
@@ -132,6 +138,12 @@ def connect_imap(acc_name, acc_cfg, mark_read=False):
         mail = ProxiedIMAP(host, port, ssl_context=ctx)
     else:
         mail = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
+
+    if hasattr(mail, "sock") and mail.sock:
+        try:
+            mail.sock.settimeout(12)
+        except Exception:
+            pass
 
     if auth_type == "xoauth2":
         if not ms_oauth2:
@@ -181,11 +193,26 @@ def query_account_mails(acc_name, acc_cfg, args):
         scan_uids = uids[-scan_limit:]
         scan_uids.reverse()
 
+        need_hdr_filter = bool(args.from_filter or args.subject)
         count = 0
         for uid in scan_uids:
+            # 阶段 1: 若指定发件人或主题过滤，先抓取信头初筛，避免无意义下载大邮件的正文
+            if need_hdr_filter:
+                res, hdr_data = mail.uid("fetch", uid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])")
+                if res != "OK" or not hdr_data or not hdr_data[0] or not isinstance(hdr_data[0], tuple):
+                    continue
+                raw_hdr = hdr_data[0][1]
+                hdr_msg = email.message_from_bytes(raw_hdr)
+                subject_pre = decode_mime_header(hdr_msg.get("Subject", ""))
+                from_pre = decode_mime_header(hdr_msg.get("From", ""))
+                if args.from_filter and args.from_filter.lower() not in from_pre.lower():
+                    continue
+                if args.subject and args.subject.lower() not in subject_pre.lower():
+                    continue
+
             fetch_cmd = "(RFC822)" if args.mark_read else "(BODY.PEEK[])"
             res, msg_data = mail.uid("fetch", uid, fetch_cmd)
-            if res != "OK" or not msg_data or not msg_data[0]:
+            if res != "OK" or not msg_data or not msg_data[0] or not isinstance(msg_data[0], tuple):
                 continue
 
             raw = msg_data[0][1]
@@ -272,9 +299,32 @@ def main():
             sys.exit(1)
 
     all_results = []
-    for acc_name, acc_cfg in target_accounts.items():
-        mails = query_account_mails(acc_name, acc_cfg, args)
-        all_results.extend(mails)
+    if len(target_accounts) > 1:
+        with ThreadPoolExecutor(max_workers=min(len(target_accounts), 8)) as executor:
+            future_to_acc = {
+                executor.submit(query_account_mails, acc_name, acc_cfg, args): acc_name
+                for acc_name, acc_cfg in target_accounts.items()
+            }
+            for future in as_completed(future_to_acc):
+                acc_name = future_to_acc[future]
+                try:
+                    mails = future.result()
+                    all_results.extend(mails)
+                except Exception as e:
+                    if not args.json:
+                        print(f"[{acc_name}] 查询线程异常: {e}", file=sys.stderr)
+    else:
+        for acc_name, acc_cfg in target_accounts.items():
+            mails = query_account_mails(acc_name, acc_cfg, args)
+            all_results.extend(mails)
+
+    def parse_date_epoch(date_str):
+        try:
+            return parsedate_to_datetime(date_str).timestamp()
+        except Exception:
+            return 0.0
+
+    all_results.sort(key=lambda x: parse_date_epoch(x.get("date", "")), reverse=True)
 
     if args.json:
         print(json.dumps(all_results, ensure_ascii=False, indent=2))
@@ -289,11 +339,16 @@ def main():
     for item in all_results:
         print("=" * 80)
         code_str = ""
-        if item["extracted"]["code"]:
-            code_str = f" | 🔑 提取验证码: [{item['extracted']['code']}] (服务: {item['extracted']['service']}, 时效: {item['extracted']['expires_in']})"
+        ext = item["extracted"]
+        if ext.get("code"):
+            code_str = f" | 🔑 验证码: [{ext['code']}] (服务: {ext['service']}, 时效: {ext['expires_in']})"
+        elif ext.get("link"):
+            code_str = f" | 🔗 确认链接: [{ext['service']}]"
         print(f"[{item['account']}] UID: {item['uid']} | 日期: {item['date']}{code_str}")
         print(f"发件人: {item['from']}")
         print(f"主题: {item['subject']}")
+        if ext.get("link"):
+            print(f"链接地址: {ext['link']}")
         print("-" * 80)
         print("纯文本正文:")
         print(item["body_plain"])
