@@ -110,6 +110,8 @@ if [ "$OS_TYPE" = "Darwin" ]; then
                 -e "s|__PYTHON_BIN__|$PYTHON_BIN|g" \
                 "$DIR/launchd/com.weicoz.mailguard.summary.plist.example" > "$LAUNCH_DIR/com.weicoz.mailguard.summary.plist"
         fi
+        # 根据 mail-guard.env 中的 SUMMARY_SCHEDULE 动态应用排班配置
+        "$PYTHON_BIN" "$DIR/scripts/cli.py" daemon schedule --apply >/dev/null 2>&1 || true
         echo "✔ LaunchAgents 守护配置已生成至: $LAUNCH_DIR"
     fi
 elif [ "$OS_TYPE" = "Linux" ]; then
@@ -131,6 +133,7 @@ elif [ "$OS_TYPE" = "Linux" ]; then
     if [ -f "$DIR/systemd/mailguard-summary.timer.example" ]; then
         cp "$DIR/systemd/mailguard-summary.timer.example" "$SYSTEMD_USER_DIR/mailguard-summary.timer"
     fi
+    "$PYTHON_BIN" "$DIR/scripts/cli.py" daemon schedule --apply >/dev/null 2>&1 || true
     if command -v systemctl >/dev/null 2>&1; then
         systemctl --user daemon-reload || true
         echo "✔ systemd 用户服务已加载 (启用命令: systemctl --user enable --now mailguard.service mailguard-summary.timer)"

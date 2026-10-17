@@ -27,6 +27,141 @@ SUMMARY_LOG = os.path.join(CONFIG_DIR, "summary.log")
 
 IDLE_PLIST = os.path.expanduser("~/Library/LaunchAgents/com.weicoz.mailguard.plist")
 SUMMARY_PLIST = os.path.expanduser("~/Library/LaunchAgents/com.weicoz.mailguard.summary.plist")
+ENV_FILE = os.path.join(CONFIG_DIR, "mail-guard.env")
+
+# 默认排班时刻表 (约 3 小时 6 班制，00:30~08:30 深夜免打扰)
+DEFAULT_SCHEDULE = ["08:30", "12:00", "15:30", "18:30", "21:30", "00:30"]
+
+def load_env():
+    env = {}
+    if os.path.exists(ENV_FILE):
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line_s = line.strip()
+                if line_s and not line_s.startswith("#") and "=" in line_s:
+                    k, v = line_s.split("=", 1)
+                    env[k.strip()] = v.strip().strip('"').strip("'")
+    return env
+
+def parse_schedule(schedule_str: str = None):
+    """解析并校验时刻表字符串，格式如 '08:30, 12:00, 15:30'"""
+    if not schedule_str:
+        return DEFAULT_SCHEDULE.copy(), False
+    items = [x.strip() for x in schedule_str.split(",") if x.strip()]
+    valid = []
+    for item in items:
+        parts = item.split(":")
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            h, m = int(parts[0]), int(parts[1])
+            if 0 <= h <= 23 and 0 <= m <= 59:
+                valid.append(f"{h:02d}:{m:02d}")
+    if valid:
+        return valid, True
+    return DEFAULT_SCHEDULE.copy(), False
+
+def get_current_schedule():
+    env = load_env()
+    val = env.get("SUMMARY_SCHEDULE", "").strip()
+    return parse_schedule(val)
+
+def generate_launchd_summary_plist(schedule: list) -> str:
+    """根据给定的时刻表动态生成 LaunchAgents plist XML 内容"""
+    python_bin = sys.executable
+    project_dir = PROJECT_ROOT
+    home_dir = os.path.expanduser("~")
+    local_bin = os.path.join(home_dir, ".local", "bin")
+
+    intervals_xml = []
+    for t in schedule:
+        h, m = map(int, t.split(":"))
+        intervals_xml.append(f"""        <dict>
+            <key>Hour</key>
+            <integer>{h}</integer>
+            <key>Minute</key>
+            <integer>{m}</integer>
+        </dict>""")
+    intervals_str = "\n".join(intervals_xml)
+
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.weicoz.mailguard.summary</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{python_bin}</string>
+        <string>{os.path.join(project_dir, 'scripts', 'daily_summary.py')}</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{local_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>StartCalendarInterval</key>
+    <array>
+{intervals_str}
+    </array>
+    <key>StandardOutPath</key>
+    <string>{os.path.join(CONFIG_DIR, 'summary.log')}</string>
+    <key>StandardErrorPath</key>
+    <string>{os.path.join(CONFIG_DIR, 'summary.err')}</string>
+</dict>
+</plist>
+"""
+
+def generate_systemd_timer(schedule: list) -> str:
+    """根据给定的时刻表动态生成 Linux systemd timer 内容"""
+    lines = [
+        "[Unit]",
+        "Description=mail-guard scheduled summary timer",
+        "After=network.target",
+        "",
+        "[Timer]"
+    ]
+    for t in schedule:
+        lines.append(f"OnCalendar=*-*-* {t}:00")
+    lines.extend([
+        "Persistent=true",
+        "",
+        "[Install]",
+        "WantedBy=timers.target",
+        ""
+    ])
+    return "\n".join(lines)
+
+def sync_schedule_to_service(verbose=True):
+    import platform
+    plat = platform.system().lower()
+    schedule, is_custom = get_current_schedule()
+
+    if plat == "darwin":
+        plist_content = generate_launchd_summary_plist(schedule)
+        os.makedirs(os.path.dirname(SUMMARY_PLIST), exist_ok=True)
+        with open(SUMMARY_PLIST, "w", encoding="utf-8") as f:
+            f.write(plist_content)
+        subprocess.run(["launchctl", "unload", SUMMARY_PLIST], stderr=subprocess.DEVNULL)
+        subprocess.run(["launchctl", "load", "-w", SUMMARY_PLIST], stderr=subprocess.DEVNULL)
+        if verbose:
+            tag = "自定义" if is_custom else "默认"
+            print(f"✔ macOS LaunchAgents 汇总排班已同步生效 [{tag}]: {', '.join(schedule)}")
+
+    elif plat == "linux":
+        timer_content = generate_systemd_timer(schedule)
+        timer_dir = os.path.expanduser("~/.config/systemd/user")
+        os.makedirs(timer_dir, exist_ok=True)
+        timer_file = os.path.join(timer_dir, "mailguard-summary.timer")
+        with open(timer_file, "w", encoding="utf-8") as f:
+            f.write(timer_content)
+        subprocess.run(["systemctl", "--user", "daemon-reload"], stderr=subprocess.DEVNULL)
+        subprocess.run(["systemctl", "--user", "restart", "mailguard-summary.timer"], stderr=subprocess.DEVNULL)
+        if verbose:
+            tag = "自定义" if is_custom else "默认"
+            print(f"✔ Linux systemd 汇总排班已同步生效 [{tag}]: {', '.join(schedule)}")
+    elif plat == "windows":
+        if verbose:
+            tag = "自定义" if is_custom else "默认"
+            print(f"ℹ Windows 环境排班已更新 [{tag}]: {', '.join(schedule)}")
 
 def run_script(script_name, extra_args):
     script_path = os.path.join(SCRIPTS_DIR, script_name)
@@ -110,8 +245,21 @@ def handle_daemon(args):
             else:
                 print("  (当前无常驻 worker 进程)")
 
+    elif action == "schedule":
+        schedule, is_custom = get_current_schedule()
+        tag = "自定义 (来自 mail-guard.env)" if is_custom else "默认班次 (约 3 小时 6 班制)"
+        print(f"=== ⏰ mail-guard 定时汇总排班 [{tag}] ===")
+        print(f"  • 时刻列表:    {', '.join(schedule)}")
+        print(f"  • 配置文件:    {ENV_FILE}")
+        print("  • 说明: 可在 mail-guard.env 中设置 SUMMARY_SCHEDULE=\"08:30, 12:00, ...\" 调整时刻")
+        if getattr(args, "apply", False):
+            sync_schedule_to_service(verbose=True)
+        else:
+            print("  • 提示: 加上 --apply 参数立即同步并重载系统服务 (例如: mail-guard daemon schedule --apply)")
+
     elif action == "restart":
-        print("正在重启 mail-guard 所有后台守护进程...")
+        print("正在重启 mail-guard 所有后台守护进程并同步最新排班...")
+        sync_schedule_to_service(verbose=False)
         if plat == "darwin":
             subprocess.run(["launchctl", "unload", IDLE_PLIST], stderr=subprocess.DEVNULL)
             subprocess.run(["launchctl", "load", "-w", IDLE_PLIST])
@@ -123,7 +271,7 @@ def handle_daemon(args):
         elif plat == "windows":
             script_path = os.path.join(SCRIPTS_DIR, "run_daemon.py")
             subprocess.Popen([sys.executable, script_path], creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-        print("✅ 后台服务已成功重启并重载配置。")
+        print("✅ 后台服务已成功重启，排班与配置已同步重载。")
 
     elif action == "start":
         print("正在加载并启动后台守护进程...")
@@ -202,19 +350,6 @@ def handle_account(args):
         ms_script = os.path.join(SCRIPTS_DIR, "ms_oauth2.py")
         subprocess.run([sys.executable, ms_script, "login"])
 
-ENV_FILE = os.path.join(CONFIG_DIR, "mail-guard.env")
-
-def load_env():
-    env = {}
-    if os.path.exists(ENV_FILE):
-        with open(ENV_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                line_s = line.strip()
-                if line_s and not line_s.startswith("#") and "=" in line_s:
-                    k, v = line_s.split("=", 1)
-                    env[k.strip()] = v.strip().strip('"').strip("'")
-    return env
-
 def handle_notify(args):
     print("正在测试全通道消息推送 (harness-notify 统一组件 / 飞书 CLI / Bark / 原生桌面弹窗)...")
     env = load_env()
@@ -271,8 +406,11 @@ def handle_config(args):
     print(f"  • 项目源码目录:  {PROJECT_ROOT}")
     print(f"  • 用户配置目录:  {CONFIG_DIR}")
     print(f"  • 账号配置文件:  {ACCOUNTS_JSON}")
-    print(f"  • 大模型配置:    {os.path.join(CONFIG_DIR, 'mail-guard.env')}")
+    print(f"  • 核心环境变量:  {ENV_FILE}")
     print(f"  • 统一通知配置:  {os.path.expanduser('~/.config/harness-notify/config.json')}")
+    schedule, is_custom = get_current_schedule()
+    tag = "自定义 (来自 mail-guard.env)" if is_custom else "默认班次 (约 3 小时 6 班制)"
+    print(f"  • 每日汇总排班:  {', '.join(schedule)} [{tag}]")
     print(f"  • 微软凭据缓存:  {os.path.join(CONFIG_DIR, 'ms_tokens.json')}")
     print(f"  • 汇总状态缓存:  {os.path.join(CONFIG_DIR, 'summary_state.json')}")
     print(f"  • 历史简报归档:  {os.path.join(CONFIG_DIR, 'summaries')}")
@@ -308,8 +446,9 @@ def main():
 
     # mail-guard daemon
     p_daemon = subparsers.add_parser("daemon", help="管理后台守护进程与定时服务")
-    p_daemon.add_argument("action", choices=["status", "restart", "start", "stop", "logs"], help="守护操作")
+    p_daemon.add_argument("action", choices=["status", "restart", "start", "stop", "logs", "schedule"], help="守护操作")
     p_daemon.add_argument("--summary", action="store_true", help="查看定时汇总日志 (配合 logs 使用)")
+    p_daemon.add_argument("--apply", action="store_true", help="立即同步并应用配置文件中的排班到系统服务 (配合 schedule 使用)")
 
     # mail-guard account
     p_account = subparsers.add_parser("account", help="查看与自检邮箱账户")

@@ -128,6 +128,10 @@ LLM_MODEL="deepseek-chat"
 FEISHU_USER=""       # 飞书 open_id (配合本机 lark-cli 直推本人)
 BARK_KEY=""          # iOS Bark 设备密钥
 BARK_SERVER="https://api.day.app"
+
+# 每日定时汇总时刻表 (可选，默认约 3 小时 6 班制，00:30~08:30 深夜免打扰)
+# 支持任意时刻组合，修改后运行 `mail-guard daemon schedule --apply` 即可同步生效
+SUMMARY_SCHEDULE="08:30, 12:00, 15:30, 18:30, 21:30, 00:30"
 ```
 > 💡 若留空不配置 LLM API，系统会自动启用本地高精度正则提取器，完全免费且零成本。
 
@@ -138,14 +142,16 @@ BARK_SERVER="https://api.day.app"
 - **自定义后壳 (post_shell.sh)**：优先调用 `harness-notify` 统一多渠道，失败自动降级为本地直接派发。
 
 ### 5. 启动后台实时监听与服务管理
-统一 CLI 提供了跨平台的守护进程管理支持：
+统一 CLI 提供了跨平台的守护进程与排班管理支持：
 ```bash
-mail-guard daemon status   # 查看服务运行状态与监听进程
-mail-guard daemon restart  # 重启后台监听
-mail-guard daemon stop     # 停止后台监听
-mail-guard daemon logs     # 实时查看监听日志
-mail-guard notify          # 测试全通道消息推送连通性
-mail-guard test            # 运行端到端流水线自测
+mail-guard daemon status            # 查看服务运行状态与监听进程
+mail-guard daemon restart           # 重启后台监听并自动同步最新排班
+mail-guard daemon schedule          # 查看当前定时汇总时刻表
+mail-guard daemon schedule --apply  # 将 mail-guard.env 的排班同步至系统服务
+mail-guard daemon stop              # 停止后台监听
+mail-guard daemon logs              # 实时查看监听日志
+mail-guard notify                   # 测试全通道消息推送连通性
+mail-guard test                     # 运行端到端流水线自测
 ```
 - **macOS**：通过 `launchd`（`LaunchAgents`）托管。
 - **Linux**：通过 `systemd --user` 用户级服务与定时器托管。
