@@ -33,12 +33,17 @@ STATE_FILE = os.path.join(CONFIG_DIR, "summary_state.json")
 SUMMARIES_DIR = os.path.join(CONFIG_DIR, "summaries")
 ENV_FILE = os.path.join(CONFIG_DIR, "mail-guard.env")
 
-# 引入项目自带的 OAuth2 模块
+# 引入项目自带模块
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import ms_oauth2
 except ImportError:
     ms_oauth2 = None
+
+try:
+    from llm_adapter import call_llm_or_harness
+except ImportError:
+    call_llm_or_harness = None
 
 def load_env():
     env = {}
@@ -237,10 +242,7 @@ def is_noise_email(subject: str, from_addr: str, body: str) -> bool:
     return any(k in text for k in noise_keywords)
 
 def analyze_with_llm(all_mails):
-    """使用大模型做深度语义分析，提炼待办与关键告警"""
-    if not LLM_API_KEY:
-        return analyze_with_rules(all_mails)
-
+    """使用大模型或本地 Harness 做深度语义分析，提炼待办与关键告警"""
     # 预过滤噪音邮件
     candidates = [m for m in all_mails if not is_noise_email(m["subject"], m["from"], m["body_preview"])]
     if not candidates:
@@ -277,27 +279,19 @@ def analyze_with_llm(all_mails):
 }}
 """
 
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {LLM_API_KEY}"
-    }
-    payload = {
-        "model": LLM_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.1
-    }
+    if call_llm_or_harness:
+        try:
+            data = call_llm_or_harness(prompt, expect_json=True, env=ENV, timeout=60)
+            if data and isinstance(data, dict):
+                data.setdefault("action_items", [])
+                data.setdefault("important_alerts", [])
+                data.setdefault("summary_text", "")
+                return data
+            print("[daily-summary] 大模型/Harness 未返回有效结构化摘要，回退到本地规则分析", file=sys.stderr)
+        except Exception as e:
+            print(f"[daily-summary] 模型/Harness 调用异常 ({e})，回退到本地规则分析", file=sys.stderr)
 
-    try:
-        req = urllib.request.Request(f"{LLM_BASE_URL}/chat/completions", data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=25) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            content = data["choices"][0]["message"]["content"].strip()
-            content = re.sub(r'^```json\s*', '', content)
-            content = re.sub(r'```$', '', content).strip()
-            return json.loads(content)
-    except Exception as e:
-        print(f"[daily-summary] LLM 总结失败 ({e})，回退到本地规则分析", file=sys.stderr)
-        return analyze_with_rules(all_mails)
+    return analyze_with_rules(all_mails)
 
 def analyze_with_rules(all_mails):
     """大模型不可用时的本地规则引擎回退"""

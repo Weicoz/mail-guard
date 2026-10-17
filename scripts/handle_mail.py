@@ -65,6 +65,13 @@ LLM_API_KEY = ENV.get("LLM_API_KEY", os.environ.get("LLM_API_KEY", ""))
 LLM_BASE_URL = ENV.get("LLM_BASE_URL", os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
 LLM_MODEL = ENV.get("LLM_MODEL", os.environ.get("LLM_MODEL", "gpt-4o-mini"))
 
+# 引入模型与 Harness 适配调度器
+try:
+    from llm_adapter import call_llm_or_harness
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from llm_adapter import call_llm_or_harness
+
 KEYWORDS = [
     "验证码", "校验码", "动态码", "安全码", "授权码", "确认码",
     "verification code", "verify code", "security code", "auth code",
@@ -108,8 +115,6 @@ def regex_extract(subject: str, body: str):
     return {"code": code, "service": service, "expires_in": expires, "link": link}
 
 def llm_extract(subject: str, body: str):
-    if not LLM_API_KEY:
-        return regex_extract(subject, body)
     prompt = f"""你是一个验证码与关键通知提取助手。请从下面这封邮件中提取核心信息。
 邮件主题: {subject}
 邮件正文:
@@ -118,19 +123,21 @@ def llm_extract(subject: str, body: str):
 必须仅输出一段严格的合法 JSON，不要附带 Markdown 代码块，格式如下:
 {{"code": "提取出的验证码/口令", "service": "发信机构或平台名称", "expires_in": "有效时限(若无填'尽快使用')"}}
 """
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {LLM_API_KEY}"}
-    payload = {"model": LLM_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1}
-    req = urllib.request.Request(f"{LLM_BASE_URL}/chat/completions", data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            content = data["choices"][0]["message"]["content"].strip()
-            content = re.sub(r'^```json\s*', '', content)
-            content = re.sub(r'```$', '', content).strip()
-            return json.loads(content)
+        data = call_llm_or_harness(prompt, expect_json=True, env=ENV, timeout=15)
+        if data and isinstance(data, dict) and data.get("code"):
+            link_match = LINK_REGEX.search(f"{subject}\n{body}")
+            link = link_match.group(1) if link_match else None
+            return {
+                "code": str(data.get("code", "未识别")),
+                "service": str(data.get("service", subject.split()[0] if subject else "未知服务")),
+                "expires_in": str(data.get("expires_in", "尽快使用")),
+                "link": link
+            }
     except Exception as e:
-        print(f"[mail-guard] LLM 调用失败或超时 ({e})，回退到正则提取", file=sys.stderr)
-        return regex_extract(subject, body)
+        print(f"[mail-guard] 模型/Harness 调用异常 ({e})，回退到正则提取", file=sys.stderr)
+
+    return regex_extract(subject, body)
 
 def decode_mime_header(val):
     if not val: return ""

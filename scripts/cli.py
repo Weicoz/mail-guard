@@ -401,12 +401,60 @@ def handle_notify(args):
     else:
         print(f"  • [飞书独立] 未检测到可执行文件 {lark_bin}")
 
+def handle_model(args):
+    try:
+        from llm_adapter import get_harness_status_report, HARNESS_PROFILES, call_llm_or_harness
+    except ImportError:
+        sys.path.insert(0, SCRIPTS_DIR)
+        from llm_adapter import get_harness_status_report, HARNESS_PROFILES, call_llm_or_harness
+
+    report = get_harness_status_report()
+    print("=== 🤖 mail-guard 模型与 Harness 调度状态 ===")
+    print(f"  • 当前模式 (LLM_PROVIDER): {report['provider']}")
+    print(f"  • 当前主用路由:             {report['active_route']}")
+    print(f"  • API Key 状态:             {report['api_key_masked']}")
+    if report.get("api_key_configured"):
+        print(f"  • API 接口地址:             {report['base_url']}")
+        print(f"  • 默认模型名称:             {report['model']}")
+    print(f"\n[本机 Harness 探测清单]")
+    for h_id, prof in HARNESS_PROFILES.items():
+        p = report["available_harnesses"].get(h_id)
+        tag = f"✅ 可用 ({p})" if p else "❌ 未安装"
+        print(f"  • {prof['name']:<20} ({h_id:<8}): {tag}")
+
+    if report["default_harness"]:
+        print(f"\n  • 自动推荐优先 Harness: {report['default_harness']}")
+
+    if getattr(args, "action", None) == "test":
+        import time
+        print("\n>> 正在执行端到端轻量提取测试...")
+        t0 = time.time()
+        test_prompt = """请从以下邮件中提取验证码与发件服务:
+主题: 【GitHub】Your two-factor authentication code
+正文: Verification code: 829104. Expire in 10 minutes.
+输出合法 JSON: {"code": "验证码", "service": "发信机构", "expires_in": "有效时限"}
+"""
+        res = call_llm_or_harness(test_prompt, expect_json=True)
+        cost = time.time() - t0
+        print(f"  • 测试耗时: {cost:.2f}s")
+        print(f"  • 提取结果: {res}")
+        if res and res.get("code") == "829104":
+            print("  • 验证状态: ✅ 模型/Harness 结构化提取成功！")
+        else:
+            print("  • 验证状态: ⚠️ 结构化提取未返回预期结果，系统将安全使用规则引擎容灾。")
+
 def handle_config(args):
     print("=== ⚙️ mail-guard 系统配置路径 ===")
     print(f"  • 项目源码目录:  {PROJECT_ROOT}")
     print(f"  • 用户配置目录:  {CONFIG_DIR}")
     print(f"  • 账号配置文件:  {ACCOUNTS_JSON}")
     print(f"  • 核心环境变量:  {ENV_FILE}")
+    try:
+        from llm_adapter import get_harness_status_report
+        m_rep = get_harness_status_report()
+        print(f"  • 模型驱动方式:  {m_rep['active_route']}")
+    except Exception:
+        pass
     print(f"  • 统一通知配置:  {os.path.expanduser('~/.config/harness-notify/config.json')}")
     schedule, is_custom = get_current_schedule()
     tag = "自定义 (来自 mail-guard.env)" if is_custom else "默认班次 (约 3 小时 6 班制)"
@@ -450,6 +498,10 @@ def main():
     p_daemon.add_argument("--summary", action="store_true", help="查看定时汇总日志 (配合 logs 使用)")
     p_daemon.add_argument("--apply", action="store_true", help="立即同步并应用配置文件中的排班到系统服务 (配合 schedule 使用)")
 
+    # mail-guard model
+    p_model = subparsers.add_parser("model", help="查看与测试大模型/Harness 调度配置与连通性")
+    p_model.add_argument("action", nargs="?", default="status", choices=["status", "test"], help="操作: status (查看状态), test (执行测试提取)")
+
     # mail-guard account
     p_account = subparsers.add_parser("account", help="查看与自检邮箱账户")
     p_account.add_argument("action", choices=["list", "test", "auth-ms"], help="账户操作")
@@ -464,7 +516,7 @@ def main():
     p_test = subparsers.add_parser("test", help="执行跨平台端到端功能自检流水线")
 
     # 兼容直接传入 query 参数
-    if len(sys.argv) > 1 and sys.argv[1] not in ["query", "summary", "daemon", "account", "notify", "config", "test", "-h", "--help", "-v", "--version"]:
+    if len(sys.argv) > 1 and sys.argv[1] not in ["query", "summary", "daemon", "account", "notify", "model", "config", "test", "-h", "--help", "-v", "--version"]:
         # 将参数透传给 query
         run_script("query_mail.py", sys.argv[1:])
         return
@@ -485,6 +537,8 @@ def main():
         handle_account(args)
     elif args.subcommand == "notify":
         handle_notify(args)
+    elif args.subcommand == "model":
+        handle_model(args)
     elif args.subcommand == "test":
         run_script("test_pipeline.py", sys.argv[2:])
     elif args.subcommand == "config":

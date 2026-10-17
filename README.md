@@ -113,18 +113,30 @@ python3 setup_account.py  # Windows 下运行: python setup_account.py
 ```
 根据提示输入你的**邮箱地址**和**应用授权码/密码**。脚本会自动识别邮箱服务商（QQ、163、Gmail、Outlook 等），配置服务器并即时测试连通性。
 
-### 3. 配置推送通道与统一调度（推荐 harness-notify）
-mail-guard 现已无缝接入本机统一推送组件 **[harness-notify](https://github.com/Weicoz/harness-notify)**：
-- **统一多渠道调度**：自动按 `~/.config/harness-notify/config.json` 的 `routes` 规则将邮件重要待办与实时验证码分发至 **飞书 (`lark-cli`)**、**iOS Bark**、**Telegram** 或 **ntfy**。
-- **免额外配置**：只需在 `config.json` 的 `routes` 中添加 `"mailguard": ["feishu", "phone"]` 即可实现全通道统一分发。
-- **独立备用配置 (可选)**：若未安装 `harness-notify`，系统自动优雅降级为读取 `~/.config/mail-guard/mail-guard.env` 直连：
+### 3. 配置大模型与推送通道 (支持免 Key 本地 Harness)
+mail-guard 支持双模智能提取，完全无需额外付费或申请 Key：
+- **免 Key 模式 (推荐)**：直接调用本机已登录或已配置的 AI Coding Agent CLI，零 Token 计费，开箱即用：
+  - 自动探测支持：**Claude Code (`claude`)**、**OpenAI Codex (`codex`)**、**Kimi Code (`kimi`)**、**Google Antigravity (`agy`)**、**DeepSeek Harness (`dsh`)**。
+  - 扩展工具与自定义：支持 `cline`、`zcode`、`kiro`、`kilo` 或通过 `LLM_HARNESS_CMD` 自定义任意 CLI。
+- **REST API 模式**：兼容标准 OpenAI / DeepSeek / 通义千问 / Ollama 本地模型 API。
+- **自动优雅降级**：若未配置 Key 且未安装 Harness，自动回退到本地高精度正则规则引擎，100% 离线、0 崩溃、0 成本。
+
+配置文件 `~/.config/mail-guard/mail-guard.env` 示例：
 ```bash
-# 大模型 API (兼容 OpenAI / DeepSeek / 通义千问 / Ollama)
-LLM_API_KEY="sk-..."
+# 模型调度驱动模式: "auto" (自动优先), "harness" (仅调用本地Agent), "api" (仅调用REST API)
+LLM_PROVIDER="auto"
+
+# 目标 Harness (留空或 "auto" 则按 claude -> codex -> kimi -> agy -> dsh 自动探测)
+LLM_HARNESS="auto"
+
+# 若使用 REST API 模式，在此填入 API Key；若走 Harness 免 Key 模式可留空
+LLM_API_KEY=""
 LLM_BASE_URL="https://api.deepseek.com/v1"
 LLM_MODEL="deepseek-chat"
 
-# 备用独立直发通道 (可选)
+# 统一推送接入 (推荐搭配 harness-notify)
+# 只要安装了 harness-notify 并在 routes 添加 "mailguard": ["feishu", "phone"] 即可统一全自动多渠道分发
+# 亦可使用独立备用通道:
 FEISHU_USER=""       # 飞书 open_id (配合本机 lark-cli 直推本人)
 BARK_KEY=""          # iOS Bark 设备密钥
 BARK_SERVER="https://api.day.app"
@@ -133,7 +145,7 @@ BARK_SERVER="https://api.day.app"
 # 支持任意时刻组合，修改后运行 `mail-guard daemon schedule --apply` 即可同步生效
 SUMMARY_SCHEDULE="08:30, 12:00, 15:30, 18:30, 21:30, 00:30"
 ```
-> 💡 若留空不配置 LLM API，系统会自动启用本地高精度正则提取器，完全免费且零成本。
+> 💡 运行 `mail-guard model` 可实时查看当前模型路由、已检测到的本地 Harness 清单，并支持 `mail-guard model test` 实时测速。
 
 ### 4. 跨平台开箱通知与自定义后壳
 - **原生桌面弹窗**：在 macOS (osascript)、Linux (notify-send) 与 Windows (PowerShell Toast) 均已开箱即用，无需第三方 Python 依赖。
@@ -150,6 +162,8 @@ mail-guard daemon schedule          # 查看当前定时汇总时刻表
 mail-guard daemon schedule --apply  # 将 mail-guard.env 的排班同步至系统服务
 mail-guard daemon stop              # 停止后台监听
 mail-guard daemon logs              # 实时查看监听日志
+mail-guard model                    # 查看大模型与本地已安装 Harness 调度状态
+mail-guard model test               # 测试模型/Harness 结构化提取与测速
 mail-guard notify                   # 测试全通道消息推送连通性
 mail-guard test                     # 运行端到端流水线自测
 ```
