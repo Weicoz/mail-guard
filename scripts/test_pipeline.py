@@ -50,7 +50,7 @@ if post_shell and os.path.exists(post_shell):
             # Windows 下若仅有 .sh，使用 git bash / wsl / powershell 兼容调用，或跳过 bash 执行
             pass
         else:
-            subprocess.run([post_shell, code, service, expires, code_subject, "test-account"], timeout=5)
+            subprocess.run([post_shell, code, service, expires, code_subject, "test-account"], timeout=15)
     except Exception as e:
         print(f"后壳触发提示: {e}")
 

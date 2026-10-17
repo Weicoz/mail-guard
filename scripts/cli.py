@@ -216,50 +216,55 @@ def load_env():
     return env
 
 def handle_notify(args):
-    print("正在测试全通道消息推送 (飞书 CLI / Bark / 原生桌面弹窗)...")
+    print("正在测试全通道消息推送 (harness-notify 统一组件 / 飞书 CLI / Bark / 原生桌面弹窗)...")
     env = load_env()
     user_id = env.get("FEISHU_USER") or os.environ.get("FEISHU_USER_ID", "")
     lark_bin = shutil.which("lark-cli") or os.path.expanduser("~/.local/bin/lark-cli")
+    harness_bin = shutil.which("harness-notify") or os.path.expanduser("~/.local/bin/harness-notify")
 
     # 1. 桌面原生弹窗 (自适应 macOS / Linux / Windows)
     send_desktop_notification("📧 mail-guard 通道测试", "这是一条来自 mail-guard CLI 的跨平台通道自检测试通知")
     print("  • [原生桌面] 弹窗已触发")
 
-    # 2. Bark 手机推送
+    # 2. harness-notify 统一多渠道调度器
+    if os.path.exists(harness_bin) and os.access(harness_bin, os.X_OK):
+        print("  • [harness-notify] 发现统一通知调度器，正在派发测试消息...")
+        res = subprocess.run(
+            [harness_bin, "send", "--harness", "mailguard", "--session-title", "CLI 通道测试", "--message", "这是一条来自 mail-guard CLI 的通道自检通知，验证 harness-notify 统一多渠道分发是否畅通。"],
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+        if res.returncode == 0:
+            print("  • [harness-notify] ✅ 统一推送测试成功！(已按 routes 分发至配置渠道)")
+        else:
+            err = res.stderr.strip() or res.stdout.strip()
+            print(f"  • [harness-notify] ❌ 发送返回异常: {err}")
+    else:
+        print("  • [harness-notify] 未检测到 harness-notify 可执行文件")
+
+    # 3. 独立 Bark 手机推送 (备用通道状态检查)
     bark_key = env.get("BARK_KEY") or os.environ.get("BARK_KEY", "")
     if bark_key:
         try:
             import urllib.request, urllib.parse
-            msg_enc = urllib.parse.quote("测试消息已收到")
+            msg_enc = urllib.parse.quote("测试消息已收到 (独立备用直连)")
             bark_server = env.get("BARK_SERVER", "https://api.day.app").rstrip("/")
             bark_url = f"{bark_server}/{bark_key}/mail-guard/{msg_enc}?group=mail-guard"
             urllib.request.urlopen(bark_url, timeout=5)
-            print("  • [Bark 手机] 推送请求已发出")
+            print("  • [Bark 独立] 备用直连请求已发出")
         except Exception as e:
-            print(f"  • [Bark 手机] 失败: {e}")
+            print(f"  • [Bark 独立] 失败: {e}")
     else:
-        print("  • [Bark 手机] 未配置 BARK_KEY，跳过")
+        print("  • [Bark 独立] 未在 mail-guard.env 配置 BARK_KEY")
 
-    # 3. 飞书 CLI
+    # 4. 独立飞书 CLI (备用通道状态检查)
     if not user_id:
-        print("  • [飞书 CLI] 未在 mail-guard.env 配置 FEISHU_USER，跳过")
+        print("  • [飞书独立] 未在 mail-guard.env 配置 FEISHU_USER")
     elif os.path.exists(lark_bin):
-        try:
-            res = subprocess.run(
-                [lark_bin, "im", "+messages-send", "--user-id", user_id, "--text", "【mail-guard CLI】消息通道测试：飞书专门推送至本人正常运作。"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=10
-            )
-            if res.returncode == 0:
-                print(f"  • [飞书 CLI] 消息已专门发送至用户 ({user_id})")
-            else:
-                print(f"  • [飞书 CLI] 发送失败: {res.stderr.strip()}")
-        except Exception as e:
-            print(f"  • [飞书 CLI] 异常: {e}")
+        print(f"  • [飞书独立] 检测到 lark-cli，备用直连就绪 (用户: {user_id})")
     else:
-        print(f"  • [飞书 CLI] 未检测到可执行文件 {lark_bin}")
+        print(f"  • [飞书独立] 未检测到可执行文件 {lark_bin}")
 
 def handle_config(args):
     print("=== ⚙️ mail-guard 系统配置路径 ===")
@@ -267,6 +272,7 @@ def handle_config(args):
     print(f"  • 用户配置目录:  {CONFIG_DIR}")
     print(f"  • 账号配置文件:  {ACCOUNTS_JSON}")
     print(f"  • 大模型配置:    {os.path.join(CONFIG_DIR, 'mail-guard.env')}")
+    print(f"  • 统一通知配置:  {os.path.expanduser('~/.config/harness-notify/config.json')}")
     print(f"  • 微软凭据缓存:  {os.path.join(CONFIG_DIR, 'ms_tokens.json')}")
     print(f"  • 汇总状态缓存:  {os.path.join(CONFIG_DIR, 'summary_state.json')}")
     print(f"  • 历史简报归档:  {os.path.join(CONFIG_DIR, 'summaries')}")
@@ -315,8 +321,11 @@ def main():
     # mail-guard config
     p_config = subparsers.add_parser("config", help="查看系统配置与存储路径")
 
+    # mail-guard test
+    p_test = subparsers.add_parser("test", help="执行跨平台端到端功能自检流水线")
+
     # 兼容直接传入 query 参数
-    if len(sys.argv) > 1 and sys.argv[1] not in ["query", "summary", "daemon", "account", "notify", "config", "-h", "--help", "-v", "--version"]:
+    if len(sys.argv) > 1 and sys.argv[1] not in ["query", "summary", "daemon", "account", "notify", "config", "test", "-h", "--help", "-v", "--version"]:
         # 将参数透传给 query
         run_script("query_mail.py", sys.argv[1:])
         return
@@ -337,6 +346,8 @@ def main():
         handle_account(args)
     elif args.subcommand == "notify":
         handle_notify(args)
+    elif args.subcommand == "test":
+        run_script("test_pipeline.py", sys.argv[2:])
     elif args.subcommand == "config":
         handle_config(args)
 

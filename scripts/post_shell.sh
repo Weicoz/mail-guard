@@ -35,17 +35,36 @@ elif command -v powershell.exe >/dev/null 2>&1; then
     " 2>/dev/null || true
 fi
 
-# 2. 飞书 CLI (lark-cli) 推送配置（支持从环境变量或 mail-guard.env 读取）
-CONFIG_ENV="${HOME}/.config/mail-guard/mail-guard.env"
-if [ -z "${FEISHU_USER:-}" ] && [ -f "$CONFIG_ENV" ]; then
-    FEISHU_USER="$(grep -E '^\s*FEISHU_USER\s*=' "$CONFIG_ENV" | cut -d'=' -f2- | tr -d '"'\'' ' || true)"
+# 2. 统一通知调度组件 harness-notify (优先调用，自动按路由分发飞书/Bark/Telegram/ntfy)
+HARNESS_NOTIFY_BIN="$(command -v harness-notify 2>/dev/null || echo "${HOME}/.local/bin/harness-notify")"
+SENT_VIA_HARNESS=0
+
+if [ -x "$HARNESS_NOTIFY_BIN" ]; then
+    MSG_TEXT="收到验证码：${CODE}
+说明：${EXPIRES}
+来源：${ACCOUNT} - ${SUBJECT}"
+    if "$HARNESS_NOTIFY_BIN" send \
+        --harness mailguard \
+        --session-title "实时验证码 [${SERVICE}]" \
+        --message "$MSG_TEXT" >/dev/null 2>&1; then
+        SENT_VIA_HARNESS=1
+        echo "[mail-guard][post-shell] harness-notify 统一多渠道推送完成: 平台=${SERVICE}, 验证码=${CODE}"
+    fi
 fi
 
-LARK_BIN="$(command -v lark-cli 2>/dev/null || echo "${HOME}/.local/bin/lark-cli")"
-if [ -n "${FEISHU_USER:-}" ] && [ -x "$LARK_BIN" ]; then
-    "$LARK_BIN" im +messages-send --user-id "$FEISHU_USER" --text "📧 【${SERVICE}】收到验证码：${CODE}
+# 3. 降级备用：直接调用飞书 CLI (lark-cli)
+if [ "$SENT_VIA_HARNESS" -eq 0 ]; then
+    CONFIG_ENV="${HOME}/.config/mail-guard/mail-guard.env"
+    if [ -z "${FEISHU_USER:-}" ] && [ -f "$CONFIG_ENV" ]; then
+        FEISHU_USER="$(grep -E '^\s*FEISHU_USER\s*=' "$CONFIG_ENV" | cut -d'=' -f2- | tr -d '"'\'' ' || true)"
+    fi
+
+    LARK_BIN="$(command -v lark-cli 2>/dev/null || echo "${HOME}/.local/bin/lark-cli")"
+    if [ -n "${FEISHU_USER:-}" ] && [ -x "$LARK_BIN" ]; then
+        "$LARK_BIN" im +messages-send --user-id "$FEISHU_USER" --text "📧 【${SERVICE}】收到验证码：${CODE}
 说明：${EXPIRES}
 来源：${ACCOUNT} - ${SUBJECT}" >/dev/null 2>&1 || true
+    fi
 fi
 
 # ------------------------------------------------------------------------------

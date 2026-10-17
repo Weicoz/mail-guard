@@ -113,15 +113,18 @@ python3 setup_account.py  # Windows 下运行: python setup_account.py
 ```
 根据提示输入你的**邮箱地址**和**应用授权码/密码**。脚本会自动识别邮箱服务商（QQ、163、Gmail、Outlook 等），配置服务器并即时测试连通性。
 
-### 3. 配置大模型与推送通道（可选）
-编辑 `~/.config/mail-guard/mail-guard.env`：
+### 3. 配置推送通道与统一调度（推荐 harness-notify）
+mail-guard 现已无缝接入本机统一推送组件 **[harness-notify](https://github.com/Weicoz/harness-notify)**：
+- **统一多渠道调度**：自动按 `~/.config/harness-notify/config.json` 的 `routes` 规则将邮件重要待办与实时验证码分发至 **飞书 (`lark-cli`)**、**iOS Bark**、**Telegram** 或 **ntfy**。
+- **免额外配置**：只需在 `config.json` 的 `routes` 中添加 `"mailguard": ["feishu", "phone"]` 即可实现全通道统一分发。
+- **独立备用配置 (可选)**：若未安装 `harness-notify`，系统自动优雅降级为读取 `~/.config/mail-guard/mail-guard.env` 直连：
 ```bash
 # 大模型 API (兼容 OpenAI / DeepSeek / 通义千问 / Ollama)
 LLM_API_KEY="sk-..."
 LLM_BASE_URL="https://api.deepseek.com/v1"
 LLM_MODEL="deepseek-chat"
 
-# 推送通知通道 (可选)
+# 备用独立直发通道 (可选)
 FEISHU_USER=""       # 飞书 open_id (配合本机 lark-cli 直推本人)
 BARK_KEY=""          # iOS Bark 设备密钥
 BARK_SERVER="https://api.day.app"
@@ -130,7 +133,9 @@ BARK_SERVER="https://api.day.app"
 
 ### 4. 跨平台开箱通知与自定义后壳
 - **原生桌面弹窗**：在 macOS (osascript)、Linux (notify-send) 与 Windows (PowerShell Toast) 均已开箱即用，无需第三方 Python 依赖。
-- **自定义后壳 (post_shell.sh)**：按需扩展 Bark、飞书或 Telegram 推送。
+- **统一通道测试**：运行 `mail-guard notify` 即可一键测试原生弹窗、`harness-notify` 调度与备用通道连通性。
+- **端到端流水线自测**：运行 `mail-guard test` 自动运行从垃圾过滤、验证码提取到多通道推送的全链路自检。
+- **自定义后壳 (post_shell.sh)**：优先调用 `harness-notify` 统一多渠道，失败自动降级为本地直接派发。
 
 ### 5. 启动后台实时监听与服务管理
 统一 CLI 提供了跨平台的守护进程管理支持：
@@ -139,6 +144,8 @@ mail-guard daemon status   # 查看服务运行状态与监听进程
 mail-guard daemon restart  # 重启后台监听
 mail-guard daemon stop     # 停止后台监听
 mail-guard daemon logs     # 实时查看监听日志
+mail-guard notify          # 测试全通道消息推送连通性
+mail-guard test            # 运行端到端流水线自测
 ```
 - **macOS**：通过 `launchd`（`LaunchAgents`）托管。
 - **Linux**：通过 `systemd --user` 用户级服务与定时器托管。

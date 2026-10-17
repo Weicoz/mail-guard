@@ -332,8 +332,33 @@ def analyze_with_rules(all_mails):
         "summary_text": summary_text
     }
 
+def send_harness_notify(session_title: str, message: str) -> bool:
+    """使用本机统一通知组件 harness-notify 派发消息"""
+    import shutil, subprocess
+    harness_bin = shutil.which("harness-notify") or os.path.expanduser("~/.local/bin/harness-notify")
+    if not (os.path.exists(harness_bin) and os.access(harness_bin, os.X_OK)):
+        return False
+
+    try:
+        proc = subprocess.run(
+            [harness_bin, "send", "--harness", "mailguard", "--session-title", session_title, "--message", message],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=15
+        )
+        if proc.returncode == 0:
+            print(f"[daily-summary] harness-notify 统一多渠道推送成功: {session_title}")
+            return True
+        else:
+            err = proc.stderr.decode(errors="ignore").strip()
+            print(f"[daily-summary] harness-notify 推送返回错误: {err}", file=sys.stderr)
+            return False
+    except Exception as e:
+        print(f"[daily-summary] harness-notify 调用异常: {e}", file=sys.stderr)
+        return False
+
 def send_notifications(analysis, report_file=None):
-    """推送通知到桌面与 Bark 手机"""
+    """推送通知到桌面与手机/飞书 (优先通过 harness-notify 统一组件派发)"""
     actions_count = len(analysis.get("action_items", []))
     alerts_count = len(analysis.get("important_alerts", []))
     total_important = actions_count + alerts_count
@@ -341,35 +366,56 @@ def send_notifications(analysis, report_file=None):
     now_str = datetime.now().strftime("%H:%M")
 
     if total_important == 0:
-        title = f"🟢 邮箱定巡简报 [{now_str}]"
-        body = "所有邮箱运行正常，无待处理事项或重要告警。"
+        session_title = f"定巡简报 [{now_str}]"
+        desktop_title = f"🟢 邮箱定巡简报 [{now_str}]"
+        desktop_body = "所有邮箱运行正常，无待处理事项或重要告警。"
     else:
-        title = f"📬 邮箱每日汇总 [{now_str}]: {actions_count} 项待办, {alerts_count} 项提醒"
+        session_title = f"每日汇总 [{now_str}] ({actions_count}待办, {alerts_count}提醒)"
+        desktop_title = f"📬 邮箱每日汇总 [{now_str}]: {actions_count} 项待办, {alerts_count} 项提醒"
         lines = []
         for a in analysis.get("action_items", [])[:2]:
             lines.append(f"• [待办] {a['subject'][:22]}")
         for al in analysis.get("important_alerts", [])[:2]:
             lines.append(f"• [提醒] {al['subject'][:22]}")
-        body = "\n".join(lines)
+        desktop_body = "\n".join(lines)
 
     # 1. 发送原生桌面弹窗通知 (自适应 macOS / Linux / Windows)
-    send_desktop_notification(title, body)
+    send_desktop_notification(desktop_title, desktop_body)
 
-    # 2. 发送 Bark 手机通知
-    if BARK_KEY:
-        try:
-            push_title = urllib.parse.quote(title)
-            push_body = urllib.parse.quote(f"{body}\n\n{analysis.get('summary_text', '')}")
-            bark_url = f"{BARK_SERVER}/{BARK_KEY}/{push_title}/{push_body}?group=mail-digest&icon=https://cdn-icons-png.flaticon.com/512/732/732200.png"
-            req = urllib.request.Request(bark_url, headers={"User-Agent": "mail-guard/1.0"})
-            urllib.request.urlopen(req, timeout=6)
-        except Exception as e:
-            print(f"[daily-summary] Bark 推送失败: {e}", file=sys.stderr)
+    # 2. 构建结构化推送摘要
+    msg_lines = [analysis.get("summary_text", "")]
+    actions = analysis.get("action_items", [])
+    alerts = analysis.get("important_alerts", [])
+    if actions:
+        msg_lines.append(f"\n🚨 待处理事项 ({len(actions)}):")
+        for a in actions:
+            msg_lines.append(f"• [{a['account'].upper()}] {a['subject']} -> {a['action_summary']}")
+    if alerts:
+        msg_lines.append(f"\n⚠️ 重要提醒 ({len(alerts)}):")
+        for al in alerts:
+            msg_lines.append(f"• [{al['account'].upper()}] {al['subject']} -> {al['alert_summary']}")
+    push_message = "\n".join(msg_lines).strip()
 
-    # 3. 发送飞书 CLI (lark-cli) 专门推送到本人
-    send_feishu_lark_notification(title, analysis)
+    # 3. 优先使用 harness-notify 统一派发通道
+    sent_via_harness = send_harness_notify(session_title, push_message)
 
-    print(f"[daily-summary] 通知已发出: {title}")
+    # 4. 若 harness-notify 未安装或派发失败，自动降级为独立渠道直发
+    if not sent_via_harness:
+        # Bark 手机推送降级
+        if BARK_KEY:
+            try:
+                push_title_enc = urllib.parse.quote(desktop_title)
+                push_body_enc = urllib.parse.quote(f"{desktop_body}\n\n{analysis.get('summary_text', '')}")
+                bark_url = f"{BARK_SERVER}/{BARK_KEY}/{push_title_enc}/{push_body_enc}?group=mail-digest&icon=https://cdn-icons-png.flaticon.com/512/732/732200.png"
+                req = urllib.request.Request(bark_url, headers={"User-Agent": "mail-guard/1.0"})
+                urllib.request.urlopen(req, timeout=6)
+            except Exception as e:
+                print(f"[daily-summary] Bark 降级推送失败: {e}", file=sys.stderr)
+
+        # 飞书 CLI (lark-cli) 降级
+        send_feishu_lark_notification(desktop_title, analysis)
+
+    print(f"[daily-summary] 通知流程完成: {desktop_title}")
 
 def send_desktop_notification(title: str, message: str):
     """跨平台桌面原生弹窗 (自适应 macOS / Linux / Windows)"""
