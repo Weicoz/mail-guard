@@ -365,7 +365,7 @@ def handle_notify(args):
     if os.path.exists(harness_bin) and os.access(harness_bin, os.X_OK):
         print("  • [harness-notify] 发现统一通知调度器，正在派发测试消息...")
         res = subprocess.run(
-            [harness_bin, "send", "--harness", "mailguard", "--session-title", "CLI 通道测试", "--message", "这是一条来自 mail-guard CLI 的通道自检通知，验证 harness-notify 统一多渠道分发是否畅通。"],
+            [harness_bin, "send", "--harness", "mailguard", "--title", "CLI 通道测试", "--body", "这是一条来自 mail-guard CLI 的通道自检通知，验证 harness-notify 统一多渠道分发是否畅通。"],
             capture_output=True,
             text=True,
             timeout=15

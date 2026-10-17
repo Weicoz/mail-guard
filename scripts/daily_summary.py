@@ -335,7 +335,7 @@ def send_harness_notify(session_title: str, message: str) -> bool:
 
     try:
         proc = subprocess.run(
-            [harness_bin, "send", "--harness", "mailguard", "--session-title", session_title, "--message", message],
+            [harness_bin, "send", "--harness", "mailguard", "--title", session_title, "--body", message],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             timeout=15

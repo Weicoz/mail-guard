@@ -45,8 +45,8 @@ if [ -x "$HARNESS_NOTIFY_BIN" ]; then
 来源：${ACCOUNT} - ${SUBJECT}"
     if "$HARNESS_NOTIFY_BIN" send \
         --harness mailguard \
-        --session-title "实时验证码 [${SERVICE}]" \
-        --message "$MSG_TEXT" >/dev/null 2>&1; then
+        --title "📧 收到验证码 [${SERVICE}]" \
+        --body "$MSG_TEXT" >/dev/null 2>&1; then
         SENT_VIA_HARNESS=1
         echo "[mail-guard][post-shell] harness-notify 统一多渠道推送完成: 平台=${SERVICE}, 验证码=${CODE}"
     fi
