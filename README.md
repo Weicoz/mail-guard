@@ -168,14 +168,17 @@ python3 scripts/query_mail.py --from "tencent.com" --full
 ```
 > 💡 默认采用 `BODY.PEEK[]` 只读模式拉取，绝对不会将服务器上的未读邮件标记为已读。
 
-### 7. 每日 4 次跨邮箱智能汇总与待办提醒 (daily_summary.py)
+### 7. 每日跨邮箱智能汇总与待办提醒 (daily_summary.py)
 全自动定时扫描 4 个邮箱，由大模型（DeepSeek）智能识别**待办事项 (Action Items)** 与 **重要告警 (Important Alerts)**，自动过滤营销噪音：
 ```bash
 # 手动触发一次增量汇总 (支持 --dry-run 演练)
 python3 scripts/daily_summary.py
 
-# 自动定时运行：已注册至 macOS 原生 launchd，固定在每天 08:30, 12:30, 18:00, 22:00 准时执行
-# 结果将保存至 ~/.config/mail-guard/summaries/ 并通过 Bark + 桌面弹窗主动推送到手机与电脑
+# 自动定时运行：已注册至 macOS 原生 launchd，采用贴合生活与工作作息的 6 班制：
+#   08:30 (早间晨报，打包整夜积压) | 12:00 (午间小结) | 15:30 (午后中场)
+#   18:30 (下班盘点) | 21:30 (晚间收尾) | 00:30 (深夜最后一班)
+#   00:30 至次日 08:30 整整 8 小时深度睡眠期间彻底静默，绝不打扰。
+# 结果保存至 ~/.config/mail-guard/summaries/ 并通过 harness-notify 统一推送至飞书本人与 Bark
 ```
 
 ---
