@@ -41,7 +41,10 @@ CODE_REGEX = re.compile(r'(?:验证码|动态码|code|Code|OTP|passcode)[^\d\w]{
 FALLBACK_CODE_REGEX = re.compile(r'\b([0-9]{4,6})\b')
 EXPIRES_REGEX = re.compile(r'([0-9一二两三四五六七八九十]+(?:分钟|小时|秒|min|minute|hour)内?(?:有效)?)')
 SERVICE_REGEX = re.compile(r'【([^】]+)】|\[([^\]]+)\]')
-LINK_REGEX = re.compile(r'(https?://[^\s<>"\'\)]+/(?:email_confirmation|confirm|verify|activate|auth)[^\s<>"\'\)]*)', re.IGNORECASE)
+LINK_REGEX = re.compile(
+    r'(https?://[^\s<>"\'\)]*(?:magic|token|login|signin|session|verify|confirm|activate|auth|reset)[^\s<>"\'\)]*)',
+    re.IGNORECASE
+)
 
 def decode_mime_header(val):
     if not val:
@@ -58,23 +61,50 @@ def decode_mime_header(val):
     except Exception:
         return str(val)
 
+def html_to_safe_plain_text(html_content: str) -> str:
+    """纯离线安全解析，阻断任何外链与间谍像素，提取纯文本与超链接"""
+    if not html_content:
+        return ""
+    cleaned = re.sub(r'(?is)<(script|style|head|noscript)[^>]*>.*?</\1>', '', html_content)
+    cleaned = re.sub(r'(?i)<a\s+[^>]*href=["\'](https?://[^"\']+)["\'][^>]*>(.*?)</a>', r'\2 (\1)', cleaned)
+    cleaned = re.sub(r'(?i)<(p|div|br|tr|li|h[1-6])[^>]*>', '\n', cleaned)
+    cleaned = re.sub(r'<[^>]+>', ' ', cleaned)
+    cleaned = cleaned.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"')
+    return re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+
 def extract_plain_text(msg):
-    """严格提取 text/plain 纯文本，杜绝外部资源加载"""
-    body = ""
+    """提取纯文本；若无 text/plain 则离线安全净化 text/html，杜绝外部加载并保全正文"""
+    plain_parts = []
+    html_parts = []
     if msg.is_multipart():
         for part in msg.walk():
             ctype = part.get_content_type()
             cdisp = str(part.get('Content-Disposition'))
-            if ctype == 'text/plain' and 'attachment' not in cdisp:
-                payload = part.get_payload(decode=True)
-                charset = part.get_content_charset() or 'utf-8'
-                if payload:
-                    body += payload.decode(charset, errors='ignore')
+            if 'attachment' in cdisp:
+                continue
+            payload = part.get_payload(decode=True)
+            if not payload:
+                continue
+            charset = part.get_content_charset() or 'utf-8'
+            text = payload.decode(charset, errors='ignore')
+            if ctype == 'text/plain':
+                plain_parts.append(text)
+            elif ctype == 'text/html' and not plain_parts:
+                html_parts.append(text)
     else:
         payload = msg.get_payload(decode=True)
         charset = msg.get_content_charset() or 'utf-8'
-        body = payload.decode(charset, errors='ignore') if payload else ""
-    return body.strip()
+        raw = payload.decode(charset, errors='ignore') if payload else ""
+        if msg.get_content_type() == 'text/plain':
+            plain_parts.append(raw)
+        elif msg.get_content_type() == 'text/html':
+            html_parts.append(raw)
+
+    if plain_parts:
+        return "\n".join(plain_parts).strip()
+    if html_parts:
+        return html_to_safe_plain_text("\n".join(html_parts))
+    return ""
 
 def extract_code_info(subject, body):
     text = f"{subject}\n{body}"

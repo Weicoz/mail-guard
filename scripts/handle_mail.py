@@ -73,15 +73,29 @@ except ImportError:
     from llm_adapter import call_llm_or_harness
 
 KEYWORDS = [
-    "验证码", "校验码", "动态码", "安全码", "授权码", "确认码",
-    "verification code", "verify code", "security code", "auth code",
+    "验证码", "校验码", "动态码", "安全码", "授权码", "确认码", "动态口令", "临时密码",
+    "verification code", "verify code", "security code", "auth code", "confirmation code", "confirm code",
     "one-time password", "otp", "passcode", "reset password", "重置密码",
-    "两步验证", "2fa", "two-factor",
+    "两步验证", "2fa", "two-factor", "magic link", "magic-link", "login link", "sign-in", "log in to",
     "confirm your email", "verify your email", "activate your account",
     "email confirmation", "确认你的邮箱", "激活账号"
 ]
 
-LINK_REGEX = re.compile(r'(https?://[^\s<>"\'\)]+/(?:email_confirmation|confirm|verify|activate|auth)[^\s<>"\'\)]*)', re.IGNORECASE)
+LINK_REGEX = re.compile(
+    r'(https?://[^\s<>"\'\)]*(?:magic|token|login|signin|session|verify|confirm|activate|auth|reset)[^\s<>"\'\)]*)',
+    re.IGNORECASE
+)
+
+def html_to_safe_plain_text(html_content: str) -> str:
+    """纯离线安全解析，阻断任何外链与间谍像素，提取纯文本与超链接"""
+    if not html_content:
+        return ""
+    cleaned = re.sub(r'(?is)<(script|style|head|noscript)[^>]*>.*?</\1>', '', html_content)
+    cleaned = re.sub(r'(?i)<a\s+[^>]*href=["\'](https?://[^"\']+)["\'][^>]*>(.*?)</a>', r'\2 (\1)', cleaned)
+    cleaned = re.sub(r'(?i)<(p|div|br|tr|li|h[1-6])[^>]*>', '\n', cleaned)
+    cleaned = re.sub(r'<[^>]+>', ' ', cleaned)
+    cleaned = cleaned.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"')
+    return re.sub(r'\n{3,}', '\n\n', cleaned).strip()
 
 def pre_filter(subject: str, body: str) -> bool:
     content = f"{subject}\n{body}".lower()
@@ -121,13 +135,15 @@ def llm_extract(subject: str, body: str):
 {body[:2000]}
 
 必须仅输出一段严格的合法 JSON，不要附带 Markdown 代码块，格式如下:
-{{"code": "提取出的验证码/口令", "service": "发信机构或平台名称", "expires_in": "有效时限(若无填'尽快使用')"}}
+{{"code": "提取出的验证码/口令(无口令填'未识别')", "link": "提取到的登录确认或重置链接(无则填null)", "service": "发信机构或平台名称", "expires_in": "有效时限(若无填'尽快使用')"}}
 """
     try:
         data = call_llm_or_harness(prompt, expect_json=True, env=ENV, timeout=15)
-        if data and isinstance(data, dict) and data.get("code"):
-            link_match = LINK_REGEX.search(f"{subject}\n{body}")
-            link = link_match.group(1) if link_match else None
+        if data and isinstance(data, dict):
+            link = data.get("link")
+            if not link or link == "null":
+                link_match = LINK_REGEX.search(f"{subject}\n{body}")
+                link = link_match.group(1) if link_match else None
             return {
                 "code": str(data.get("code", "未识别")),
                 "service": str(data.get("service", subject.split()[0] if subject else "未知服务")),
@@ -151,21 +167,38 @@ def decode_mime_header(val):
     return "".join(res)
 
 def extract_plain_text_from_msg(msg):
-    """仅提取纯文本正文，绝对不请求任何远程内容"""
-    body = ""
+    """仅提取纯文本正文，绝对不请求任何远程内容；纯 HTML 邮件自动执行离线安全净化"""
+    plain_parts = []
+    html_parts = []
     if msg.is_multipart():
         for part in msg.walk():
             ctype = part.get_content_type()
             cdisp = str(part.get('Content-Disposition'))
-            if ctype == 'text/plain' and 'attachment' not in cdisp:
-                payload = part.get_payload(decode=True)
-                charset = part.get_content_charset() or 'utf-8'
-                body += payload.decode(charset, errors='ignore')
+            if 'attachment' in cdisp:
+                continue
+            payload = part.get_payload(decode=True)
+            if not payload:
+                continue
+            charset = part.get_content_charset() or 'utf-8'
+            text = payload.decode(charset, errors='ignore')
+            if ctype == 'text/plain':
+                plain_parts.append(text)
+            elif ctype == 'text/html' and not plain_parts:
+                html_parts.append(text)
     else:
         payload = msg.get_payload(decode=True)
         charset = msg.get_content_charset() or 'utf-8'
-        body = payload.decode(charset, errors='ignore') if payload else ""
-    return body
+        raw = payload.decode(charset, errors='ignore') if payload else ""
+        if msg.get_content_type() == 'text/plain':
+            plain_parts.append(raw)
+        elif msg.get_content_type() == 'text/html':
+            html_parts.append(raw)
+
+    if plain_parts:
+        return "\n".join(plain_parts).strip()
+    if html_parts:
+        return html_to_safe_plain_text("\n".join(html_parts))
+    return ""
 
 def get_account_config(account_name: str):
     """根据账号名获取配置，优先读取 accounts.json，回退到 goimapnotify.yaml"""
@@ -257,8 +290,8 @@ def read_mail_by_uid(account: str, folder: str, uid: str):
 
     try:
         mail = get_imap_connection(acc_cfg)
-        mail.select(folder or "INBOX")
-        res, msg_data = mail.uid('fetch', str(uid), '(RFC822)')
+        mail.select(folder or "INBOX", readonly=True)
+        res, msg_data = mail.uid('fetch', str(uid), '(BODY.PEEK[])')
         mail.logout()
         if res == 'OK' and msg_data and msg_data[0]:
             raw = msg_data[0][1]
@@ -294,16 +327,19 @@ def main():
     result = llm_extract(subject, body)
     
     code = result.get("code", "未识别")
+    link = result.get("link", "")
     service = result.get("service", "未知")
     expires_in = result.get("expires_in", "")
 
     print(f"[mail-guard] 提取成功: [{service}] 验证码: {code} ({expires_in})")
+    if link:
+        print(f"[mail-guard] 发现登录/确认链接: {link}")
 
     # 2. 触发用户后壳脚本
     post_shell = find_post_shell()
     if post_shell and os.access(post_shell, os.X_OK):
         print(f"[mail-guard] 执行后壳: {post_shell}")
-        subprocess.run([post_shell, code, service, expires_in, subject, account])
+        subprocess.run([post_shell, code, service, expires_in, subject, account, link or ""])
 
 if __name__ == "__main__":
     main()

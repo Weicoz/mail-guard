@@ -482,6 +482,7 @@ def main():
     p_query.add_argument("--subject", "-s", default="", help="主题检索")
     p_query.add_argument("--days", "-d", type=int, default=30, help="过去 N 天内")
     p_query.add_argument("--json", action="store_true", help="以结构化 JSON 输出")
+    p_query.add_argument("--folder", default="INBOX", help="指定 IMAP 文件夹 (如 INBOX, Junk)")
     p_query.add_argument("--full", action="store_true", help="输出完整邮件正文")
     p_query.add_argument("--mark-read", action="store_true", help="将查询到的邮件标记为已读")
 

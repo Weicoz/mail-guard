@@ -9,6 +9,7 @@
 #   $3 - 有效时间/说明 (例如 "5分钟内有效", "如非本人操作请忽略")
 #   $4 - 邮件主题 (Subject)
 #   $5 - 来源邮箱账号名称 (例如 "work", "personal")
+#   $6 - 登录/确认链接 (可选，Magic Link 或重置链接)
 # ==============================================================================
 
 CODE="${1:-无}"
@@ -16,14 +17,20 @@ SERVICE="${2:-未知服务}"
 EXPIRES="${3:-}"
 SUBJECT="${4:-验证码通知}"
 ACCOUNT="${5:-default}"
+LINK="${6:-}"
 
 # 1. 默认：原生桌面弹窗通知 (自适应 macOS / Linux / Windows)
+NOTIF_BODY="${SERVICE} 验证码: ${CODE} ${EXPIRES}"
+if [ -n "$LINK" ] && [ "$LINK" != "无" ]; then
+    NOTIF_BODY="${NOTIF_BODY} (含登录链接)"
+fi
+
 if command -v osascript >/dev/null 2>&1; then
     # macOS
-    osascript -e "display notification \"${SERVICE} 验证码: ${CODE} ${EXPIRES}\" with title \"📧 收到新验证码 [${ACCOUNT}]\" sound name \"Glass\"" 2>/dev/null || true
+    osascript -e "display notification \"${NOTIF_BODY}\" with title \"📧 收到新验证码 [${ACCOUNT}]\" sound name \"Glass\"" 2>/dev/null || true
 elif command -v notify-send >/dev/null 2>&1; then
     # Linux (libnotify)
-    notify-send -a "mail-guard" "📧 收到新验证码 [${ACCOUNT}]" "${SERVICE} 验证码: ${CODE} ${EXPIRES}" 2>/dev/null || true
+    notify-send -a "mail-guard" "📧 收到新验证码 [${ACCOUNT}]" "${NOTIF_BODY}" 2>/dev/null || true
 elif command -v powershell.exe >/dev/null 2>&1; then
     # Windows (WSL/Git Bash)
     powershell.exe -NoProfile -Command "
@@ -31,7 +38,7 @@ elif command -v powershell.exe >/dev/null 2>&1; then
         \$notify = New-Object System.Windows.Forms.NotifyIcon;
         \$notify.Icon = [System.Drawing.SystemIcons]::Information;
         \$notify.Visible = \$true;
-        \$notify.ShowBalloonTip(5000, '📧 收到新验证码 [${ACCOUNT}]', '${SERVICE} 验证码: ${CODE} ${EXPIRES}', [System.Windows.Forms.ToolTipIcon]::Info);
+        \$notify.ShowBalloonTip(5000, '📧 收到新验证码 [${ACCOUNT}]', '${NOTIF_BODY}', [System.Windows.Forms.ToolTipIcon]::Info);
     " 2>/dev/null || true
 fi
 
@@ -43,6 +50,12 @@ if [ -x "$HARNESS_NOTIFY_BIN" ]; then
     MSG_TEXT="收到验证码：${CODE}
 说明：${EXPIRES}
 来源：${ACCOUNT} - ${SUBJECT}"
+    if [ -n "$LINK" ] && [ "$LINK" != "无" ]; then
+        MSG_TEXT="${MSG_TEXT}
+🔗 登录/确认链接 (请手动复制在浏览器中打开):
+${LINK}"
+    fi
+
     if "$HARNESS_NOTIFY_BIN" send \
         --harness mailguard \
         --title "📧 收到验证码 [${SERVICE}]" \
