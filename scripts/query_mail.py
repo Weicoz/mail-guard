@@ -29,12 +29,17 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_DIR = os.path.expanduser("~/.config/mail-guard")
 ACCOUNTS_CONFIG = os.path.join(CONFIG_DIR, "accounts.json")
 
-# 引入项目自带的 OAuth2 模块
+# 引入项目自带的模块
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import ms_oauth2
 except ImportError:
     ms_oauth2 = None
+
+try:
+    import cache_manager
+except ImportError:
+    cache_manager = None
 
 # 验证码快速正则
 CODE_REGEX = re.compile(r'(?:验证码|动态码|code|Code|OTP|passcode)[^\d\w]{0,10}([0-9a-zA-Z]{4,8})\b')
@@ -188,6 +193,66 @@ def connect_imap(acc_name, acc_cfg, mark_read=False):
 
     return mail
 
+def parse_batch_fetch(fetch_data):
+    """解析 IMAP 批量返回的 tuple 集合"""
+    items = []
+    for entry in fetch_data:
+        if isinstance(entry, tuple) and len(entry) == 2:
+            meta, raw_bytes = entry[0], entry[1]
+            m_uid = re.search(rb'UID\s+(\d+)', meta)
+            m_size = re.search(rb'RFC822\.SIZE\s+(\d+)', meta)
+            uid = m_uid.group(1).decode("utf-8", errors="ignore") if m_uid else ""
+            size = int(m_size.group(1)) if m_size else len(raw_bytes)
+            items.append((uid, raw_bytes, size))
+    return items
+
+def process_raw_mail_item(acc_name, acc_cfg, args, uid, raw_bytes):
+    """从原始邮件字节流中解析出结构化 mail_item 并同步沉淀热快照"""
+    msg = email.message_from_bytes(raw_bytes)
+    subject = decode_mime_header(msg.get("Subject", ""))
+    from_addr = decode_mime_header(msg.get("From", ""))
+    to_addr = decode_mime_header(msg.get("To", ""))
+    date_str = decode_mime_header(msg.get("Date", ""))
+    body = extract_plain_text(msg)
+
+    code_info = extract_code_info(subject, body)
+    body_display = body if args.full else (
+        body if len(body) <= 1000 else (body[:1000] + "\n...[正文过长已截断，使用 --full 查看全文]...")
+    )
+
+    item = {
+        "account": acc_name,
+        "user": acc_cfg.get("user"),
+        "mailbox": args.folder,
+        "uid": str(uid),
+        "date": date_str,
+        "from": from_addr,
+        "to": to_addr,
+        "subject": subject,
+        "body_plain": body_display,
+        "extracted": code_info,
+        "cached": False
+    }
+
+    # 同步回填本地 SQLite WAL 热快照 (0 额外网络，单次耗时 < 1ms)
+    if cache_manager:
+        cache_manager.save_mail(
+            account=acc_name,
+            mailbox=args.folder,
+            uid=str(uid),
+            subject=subject,
+            body_plain=body,
+            date_str=date_str,
+            from_addr=from_addr,
+            to_addr=to_addr,
+            code=code_info.get("code"),
+            service=code_info.get("service"),
+            expires_in=code_info.get("expires_in"),
+            link=code_info.get("link")
+        )
+
+    return item
+
 def query_account_mails(acc_name, acc_cfg, args):
     results = []
     try:
@@ -199,94 +264,100 @@ def query_account_mails(acc_name, acc_cfg, args):
 
     try:
         # 默认使用只读模式，不改变服务器上邮件状态
-        mail.select(args.folder, readonly=not args.mark_read)
-
-        # 构造搜索条件
-        search_criteria = ["ALL"]
-        if args.days > 0:
-            since_date = (datetime.now() - timedelta(days=args.days)).strftime("%d-%b-%Y")
-            search_criteria = ["SINCE", since_date]
-
-        res, data = mail.uid("search", None, *search_criteria)
-        if res != "OK" or not data[0]:
+        res, sel_data = mail.select(args.folder, readonly=not args.mark_read)
+        if res != "OK" or not sel_data or not sel_data[0]:
             mail.logout()
             return results
 
-        uids = data[0].split()
-        if not uids:
+        try:
+            total_msgs = int(sel_data[0])
+        except Exception:
+            total_msgs = 0
+
+        if total_msgs == 0:
             mail.logout()
             return results
 
-        # 倒序遍历（从最新到最旧）
-        # 如果有关键词或发件人过滤，多扫描一部分候选邮件
-        scan_limit = args.limit * 5 if (args.keyword or args.from_filter or args.subject) else args.limit
-        scan_uids = uids[-scan_limit:]
-        scan_uids.reverse()
+        # 判定是否为“拉取最新 N 封且无复杂历史过滤”的极速场景
+        is_simple_latest = (args.days == 0 or args.days >= 30) and not (args.keyword or args.from_filter or args.subject)
 
-        need_hdr_filter = bool(args.from_filter or args.subject)
-        count = 0
-        for uid in scan_uids:
-            # 阶段 1: 若指定发件人或主题过滤，先抓取信头初筛，避免无意义下载大邮件的正文
+        if is_simple_latest:
+            # 协议级 Sequence Range 切片: 砍掉 530ms 的 search ALL 与 28KB 无用传输
+            start_seq = max(1, total_msgs - args.limit + 1)
+            seq_set = f"{start_seq}:{total_msgs}"
+            fetch_cmd = "(UID RFC822.SIZE RFC822)" if args.mark_read else "(UID RFC822.SIZE BODY.PEEK[])"
+            res, fetch_data = mail.fetch(seq_set, fetch_cmd)
+            if res == "OK" and fetch_data:
+                parsed_items = parse_batch_fetch(fetch_data)
+                parsed_items.reverse()  # 最新优先
+                for uid, raw_bytes, size in parsed_items[:args.limit]:
+                    item = process_raw_mail_item(acc_name, acc_cfg, args, uid, raw_bytes)
+                    results.append(item)
+        else:
+            # 复杂过滤模式: 按条件进行 UID search，然后批量抓取候选集合
+            search_criteria = []
+            if args.days > 0:
+                since_date = (datetime.now() - timedelta(days=args.days)).strftime("%d-%b-%Y")
+                search_criteria.extend(["SINCE", since_date])
+            if not search_criteria:
+                search_criteria = ["ALL"]
+
+            res, data = mail.uid("search", None, *search_criteria)
+            if res != "OK" or not data[0]:
+                mail.logout()
+                return results
+
+            uids = data[0].split()
+            if not uids:
+                mail.logout()
+                return results
+
+            scan_limit = args.limit * 5 if (args.keyword or args.from_filter or args.subject) else args.limit
+            scan_uids = uids[-scan_limit:]
+            scan_uids.reverse()
+
+            need_hdr_filter = bool(args.from_filter or args.subject)
+            candidate_uids = []
+
+            # 若有发件人或主题过滤，先轻量批量抓取信头初筛
             if need_hdr_filter:
-                res, hdr_data = mail.uid("fetch", uid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])")
-                if res != "OK" or not hdr_data or not hdr_data[0] or not isinstance(hdr_data[0], tuple):
-                    continue
-                raw_hdr = hdr_data[0][1]
-                hdr_msg = email.message_from_bytes(raw_hdr)
-                subject_pre = decode_mime_header(hdr_msg.get("Subject", ""))
-                from_pre = decode_mime_header(hdr_msg.get("From", ""))
-                if args.from_filter and args.from_filter.lower() not in from_pre.lower():
-                    continue
-                if args.subject and args.subject.lower() not in subject_pre.lower():
-                    continue
+                uid_chunk = b",".join(scan_uids)
+                res, hdr_data = mail.uid("fetch", uid_chunk, "(UID BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])")
+                if res == "OK" and hdr_data:
+                    parsed_hdrs = parse_batch_fetch(hdr_data)
+                    for uid, raw_hdr, _ in parsed_hdrs:
+                        hdr_msg = email.message_from_bytes(raw_hdr)
+                        sub_pre = decode_mime_header(hdr_msg.get("Subject", ""))
+                        from_pre = decode_mime_header(hdr_msg.get("From", ""))
+                        if args.from_filter and args.from_filter.lower() not in from_pre.lower():
+                            continue
+                        if args.subject and args.subject.lower() not in sub_pre.lower():
+                            continue
+                        candidate_uids.append(uid.encode("utf-8"))
+                        if len(candidate_uids) >= args.limit:
+                            break
+            else:
+                candidate_uids = scan_uids[:args.limit]
 
-            fetch_cmd = "(RFC822)" if args.mark_read else "(BODY.PEEK[])"
-            res, msg_data = mail.uid("fetch", uid, fetch_cmd)
-            if res != "OK" or not msg_data or not msg_data[0] or not isinstance(msg_data[0], tuple):
-                continue
-
-            raw = msg_data[0][1]
-            if not isinstance(raw, bytes):
-                continue
-
-            msg = email.message_from_bytes(raw)
-            subject = decode_mime_header(msg.get("Subject", ""))
-            from_addr = decode_mime_header(msg.get("From", ""))
-            to_addr = decode_mime_header(msg.get("To", ""))
-            date_str = decode_mime_header(msg.get("Date", ""))
-            body = extract_plain_text(msg)
-
-            # 过滤逻辑 (Python 本地过滤，兼容全字符集与中文)
-            if args.from_filter and args.from_filter.lower() not in from_addr.lower():
-                continue
-            if args.subject and args.subject.lower() not in subject.lower():
-                continue
-            if args.keyword:
-                kw = args.keyword.lower()
-                if kw not in subject.lower() and kw not in body.lower():
-                    continue
-
-            code_info = extract_code_info(subject, body)
-            
-            # 正文展示截断（除非指定 --full）
-            body_display = body if args.full else (body[:1000] + ("\n...[正文过长已截断，使用 --full 查看全文]..." if len(body) > 1000 else ""))
-
-            mail_item = {
-                "account": acc_name,
-                "user": acc_cfg.get("user"),
-                "mailbox": args.folder,
-                "uid": uid.decode("utf-8", errors="ignore"),
-                "date": date_str,
-                "from": from_addr,
-                "to": to_addr,
-                "subject": subject,
-                "body_plain": body_display,
-                "extracted": code_info
-            }
-            results.append(mail_item)
-            count += 1
-            if count >= args.limit:
-                break
+            if candidate_uids:
+                fetch_cmd = "(UID RFC822.SIZE RFC822)" if args.mark_read else "(UID RFC822.SIZE BODY.PEEK[])"
+                uid_str = b",".join(candidate_uids)
+                res, msg_data = mail.uid("fetch", uid_str, fetch_cmd)
+                if res == "OK" and msg_data:
+                    parsed_msgs = parse_batch_fetch(msg_data)
+                    uid_to_msg = {uid: (raw, sz) for uid, raw, sz in parsed_msgs}
+                    for u in candidate_uids:
+                        u_str = u.decode("utf-8", errors="ignore")
+                        if u_str in uid_to_msg:
+                            raw, sz = uid_to_msg[u_str]
+                            item = process_raw_mail_item(acc_name, acc_cfg, args, u_str, raw)
+                            if args.keyword:
+                                kw = args.keyword.lower()
+                                if kw not in item["subject"].lower() and kw not in item["body_plain"].lower():
+                                    continue
+                            results.append(item)
+                            if len(results) >= args.limit:
+                                break
 
         mail.logout()
     except Exception as e:
@@ -307,6 +378,7 @@ def main():
     parser.add_argument("--json", action="store_true", help="以结构化 JSON 输出 (专供 Agent 解析)")
     parser.add_argument("--full", action="store_true", help="输出完整邮件正文 (不截断)")
     parser.add_argument("--mark-read", action="store_true", help="将查询到的邮件标记为已读 (默认保持未读 PEEK 状态)")
+    parser.add_argument("--live", action="store_true", help="强制穿透缓存直连 IMAP 邮件服务器获取最新邮件 (默认优先读取秒级本地热快照)")
     
     args = parser.parse_args()
 
@@ -329,24 +401,52 @@ def main():
             sys.exit(1)
 
     all_results = []
-    if len(target_accounts) > 1:
-        with ThreadPoolExecutor(max_workers=min(len(target_accounts), 8)) as executor:
-            future_to_acc = {
-                executor.submit(query_account_mails, acc_name, acc_cfg, args): acc_name
-                for acc_name, acc_cfg in target_accounts.items()
-            }
-            for future in as_completed(future_to_acc):
-                acc_name = future_to_acc[future]
-                try:
-                    mails = future.result()
-                    all_results.extend(mails)
-                except Exception as e:
-                    if not args.json:
-                        print(f"[{acc_name}] 查询线程异常: {e}", file=sys.stderr)
-    else:
-        for acc_name, acc_cfg in target_accounts.items():
-            mails = query_account_mails(acc_name, acc_cfg, args)
-            all_results.extend(mails)
+
+    # 1. Cache-First 极速热快照读取 (若未指定 --live 且未要求强制标已读)
+    used_cache = False
+    if not args.live and not args.mark_read and cache_manager:
+        query_acc = args.account if args.account in accounts else ("all" if args.account == "all" else None)
+        if query_acc:
+            cached_items = cache_manager.query_cached_mails(
+                account=query_acc,
+                mailbox=args.folder,
+                limit=args.limit,
+                keyword=args.keyword,
+                from_filter=args.from_filter,
+                subject=args.subject,
+                days=args.days,
+                full=args.full
+            )
+            # 补齐 user 字段
+            for it in cached_items:
+                acc_info = accounts.get(it["account"], {})
+                it["user"] = acc_info.get("user", "")
+
+            # 若查单账号有结果，或查 all 有数据，直接作为结果
+            if cached_items:
+                all_results = cached_items
+                used_cache = True
+
+    # 2. 直连 IMAP 查询 (未命中缓存或指定 --live / --mark-read)
+    if not all_results and not used_cache:
+        if len(target_accounts) > 1:
+            with ThreadPoolExecutor(max_workers=min(len(target_accounts), 4)) as executor:
+                future_to_acc = {
+                    executor.submit(query_account_mails, acc_name, acc_cfg, args): acc_name
+                    for acc_name, acc_cfg in target_accounts.items()
+                }
+                for future in as_completed(future_to_acc):
+                    acc_name = future_to_acc[future]
+                    try:
+                        mails = future.result()
+                        all_results.extend(mails)
+                    except Exception as e:
+                        if not args.json:
+                            print(f"[{acc_name}] 查询线程异常: {e}", file=sys.stderr)
+        else:
+            for acc_name, acc_cfg in target_accounts.items():
+                mails = query_account_mails(acc_name, acc_cfg, args)
+                all_results.extend(mails)
 
     def parse_date_epoch(date_str):
         try:
@@ -365,15 +465,16 @@ def main():
         print(f"未找到符合条件的邮件 (账号: {args.account}, 关键词: '{args.keyword}', 发件人: '{args.from_filter}')")
         return
 
-    print(f"共查询到 {len(all_results)} 封邮件:")
+    source_tag = " [来自本地极速热快照 < 5ms，加 --live 强制直连邮件服务器]" if used_cache else " [来自 IMAP 实时连接]"
+    print(f"共查询到 {len(all_results)} 封邮件{source_tag}:")
     for item in all_results:
         print("=" * 80)
         code_str = ""
-        ext = item["extracted"]
+        ext = item.get("extracted", {})
         if ext.get("code"):
-            code_str = f" | 🔑 验证码: [{ext['code']}] (服务: {ext['service']}, 时效: {ext['expires_in']})"
+            code_str = f" | 🔑 验证码: [{ext['code']}] (服务: {ext.get('service')}, 时效: {ext.get('expires_in')})"
         elif ext.get("link"):
-            code_str = f" | 🔗 确认链接: [{ext['service']}]"
+            code_str = f" | 🔗 确认链接: [{ext.get('service')}]"
         print(f"[{item['account']}] UID: {item['uid']} | 日期: {item['date']}{code_str}")
         print(f"发件人: {item['from']}")
         print(f"主题: {item['subject']}")

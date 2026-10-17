@@ -485,6 +485,7 @@ def main():
     p_query.add_argument("--folder", default="INBOX", help="指定 IMAP 文件夹 (如 INBOX, Junk)")
     p_query.add_argument("--full", action="store_true", help="输出完整邮件正文")
     p_query.add_argument("--mark-read", action="store_true", help="将查询到的邮件标记为已读")
+    p_query.add_argument("--live", action="store_true", help="强制穿透缓存直连 IMAP 邮件服务器获取最新邮件 (默认优先读取秒级本地热快照)")
 
     # mail-guard summary
     p_summary = subparsers.add_parser("summary", help="执行跨邮箱待办与重要提醒智能汇总")

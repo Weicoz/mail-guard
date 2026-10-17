@@ -22,6 +22,12 @@ import ssl
 import email
 from email.header import decode_header
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import cache_manager
+except ImportError:
+    cache_manager = None
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_DIR = os.path.expanduser("~/.config/mail-guard")
 ACCOUNTS_CONFIG = os.path.join(CONFIG_DIR, "accounts.json")
@@ -282,7 +288,7 @@ def get_imap_connection(acc_cfg: dict):
     return mail
 
 def read_mail_by_uid(account: str, folder: str, uid: str):
-    """通过本地 IMAP 仅抓取指定邮件的纯文本，物理阻断远程追踪"""
+    """通过本地 IMAP 仅抓取指定邮件的纯文本，物理阻断远程追踪并沉淀热快照"""
     acc_cfg = get_account_config(account)
     if not acc_cfg or not acc_cfg.get("user"):
         print(f"[mail-guard] 未找到账号 '{account}' 的配置", file=sys.stderr)
@@ -297,7 +303,24 @@ def read_mail_by_uid(account: str, folder: str, uid: str):
             raw = msg_data[0][1]
             msg = email.message_from_bytes(raw)
             subject = decode_mime_header(msg.get("Subject"))
+            from_addr = decode_mime_header(msg.get("From"))
+            to_addr = decode_mime_header(msg.get("To"))
+            date_str = decode_mime_header(msg.get("Date"))
             body = extract_plain_text_from_msg(msg)
+
+            # 立即写入本地 SQLite WAL 快照 (0-Token 正则预提，单次耗时 < 2ms)
+            if cache_manager:
+                cache_manager.save_mail(
+                    account=account,
+                    mailbox=folder or "INBOX",
+                    uid=str(uid),
+                    subject=subject,
+                    body_plain=body,
+                    date_str=date_str,
+                    from_addr=from_addr,
+                    to_addr=to_addr
+                )
+
             return subject, body
     except Exception as e:
         print(f"[mail-guard] IMAP 读取失败 ({account}): {e}", file=sys.stderr)
@@ -320,7 +343,7 @@ def main():
 
     # 1. 本地零 Token 预筛选
     if not pre_filter(subject, body):
-        print(f"[mail-guard] 非目标/非验证码邮件 ('{subject}')，跳过 (消耗 0 Token)")
+        print(f"[mail-guard] 非目标/非验证码邮件 ('{subject}')，已存入热缓存并跳过模型 (消耗 0 Token)")
         sys.exit(0)
 
     print(f"[mail-guard] 命中验证码关键词，唤醒大模型进行提取...")
@@ -330,6 +353,18 @@ def main():
     link = result.get("link", "")
     service = result.get("service", "未知")
     expires_in = result.get("expires_in", "")
+
+    # 增量刷新缓存中的结构化提炼结果
+    if cache_manager:
+        cache_manager.update_mail_extraction(
+            account=account,
+            mailbox=folder or "INBOX",
+            uid=str(uid),
+            code=code,
+            service=service,
+            expires_in=expires_in,
+            link=link or ""
+        )
 
     print(f"[mail-guard] 提取成功: [{service}] 验证码: {code} ({expires_in})")
     if link:

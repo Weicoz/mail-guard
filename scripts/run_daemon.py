@@ -139,7 +139,7 @@ def main():
         processes[name] = start_account_worker(name, cfg)
 
     while running:
-        time.sleep(5)
+        time.sleep(15)
         for name, proc in list(processes.items()):
             poll = proc.poll()
             if poll is not None:
